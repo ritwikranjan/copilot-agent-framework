@@ -1,0 +1,59 @@
+# Docker Compose for Local Testing
+# Spins up Copilot CLI Server and Base API Service for local development/testing
+#
+# Usage:
+#   1. Create a .env file with COPILOT_GITHUB_TOKEN
+#   2. Run: docker-compose -f docker-compose.test.yml up --build
+#   3. In another terminal, run the test script: node tests/local-test.mjs
+
+version: '3.8'
+
+services:
+  # Copilot CLI Server - provides the CLI endpoint for SDK clients
+  copilot-cli-server:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    environment:
+      - COPILOT_GITHUB_TOKEN=${COPILOT_GITHUB_TOKEN}
+    ports:
+      - "3000:3000"
+    healthcheck:
+      test: ["CMD", "nc", "-z", "localhost", "3000"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 10s
+    networks:
+      - copilot-network
+
+  # Base API Service - the API that Teams bot will call
+  base-api:
+    build:
+      context: ./services/base-api
+      dockerfile: Dockerfile
+    environment:
+      - CLI_URL=copilot-cli-server:3000
+      - PORT=8080
+      - AZURE_TENANT_ID=${AZURE_TENANT_ID:-common}
+      - AZURE_CLIENT_ID=${AZURE_CLIENT_ID:-87a8f0f7-46fc-4c9f-aebf-c3ff4a2aa191}
+      - AZURE_AUDIENCE=${AZURE_AUDIENCE:-api://87a8f0f7-46fc-4c9f-aebf-c3ff4a2aa191}
+      - NODE_ENV=development
+      - LOG_LEVEL=info
+    ports:
+      - "8080:8080"
+    depends_on:
+      copilot-cli-server:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "wget", "--no-verbose", "--tries=1", "--spider", "http://localhost:8080/health"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 10s
+    networks:
+      - copilot-network
+
+networks:
+  copilot-network:
+    driver: bridge

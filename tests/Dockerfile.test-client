@@ -1,0 +1,16 @@
+# Test Client Container for Copilot CLI Server
+# Runs comprehensive tests against the CLI server
+
+FROM node:22-alpine
+
+WORKDIR /app
+
+# Install dependencies
+RUN npm init -y && npm install @github/copilot-sdk
+
+# Copy test script
+COPY tests/run-tests.mjs ./run-tests.mjs
+
+# Keep container running (tests triggered via exec or restart)
+# The container will run tests on startup and exit
+CMD ["node", "run-tests.mjs"]

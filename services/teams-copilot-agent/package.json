@@ -1,0 +1,43 @@
+{
+  "name": "teams-copilot-agent",
+  "version": "1.0.0",
+  "description": "Teams Copilot Agent - Unified service combining Teams Bot with direct Copilot SDK integration",
+  "main": "dist/index.js",
+  "type": "module",
+  "scripts": {
+    "clean": "rimraf dist",
+    "build": "tsup",
+    "start": "node dist/index.js",
+    "dev": "tsx watch -r dotenv/config src/index.ts",
+    "test": "vitest run",
+    "test:watch": "vitest",
+    "test:coverage": "vitest run --coverage"
+  },
+  "dependencies": {
+    "@azure/cosmos": "^4.2.0",
+    "@azure/identity": "^4.5.0",
+    "@copilot-cli-server/stateless-copilot-sdk": "*",
+    "@github/copilot-sdk": "^0.1.20",
+    "@microsoft/teams.api": "latest",
+    "@microsoft/teams.apps": "latest",
+    "@microsoft/teams.botbuilder": "^2.0.5",
+    "@microsoft/teams.cards": "latest",
+    "@microsoft/teams.common": "latest",
+    "@microsoft/teams.dev": "latest",
+    "@microsoft/teams.graph": "latest",
+    "uuid": "^11.0.5"
+  },
+  "devDependencies": {
+    "@types/node": "^22.10.7",
+    "@types/uuid": "^10.0.0",
+    "dotenv": "^16.4.5",
+    "rimraf": "^6.0.1",
+    "tsup": "^8.4.0",
+    "tsx": "^4.20.6",
+    "typescript": "^5.7.3",
+    "vitest": "^2.1.8"
+  },
+  "engines": {
+    "node": ">=22.0.0"
+  }
+}

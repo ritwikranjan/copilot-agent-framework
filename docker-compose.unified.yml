@@ -1,0 +1,177 @@
+# Docker Compose for Unified Teams Copilot Agent
+# Local development and testing configuration
+#
+# Usage:
+#   1. Create a .env file with COPILOT_GITHUB_TOKEN
+#   2. Optionally set AGENT_PROFILE to an agent directory name (e.g., code-reviewer)
+#   3. Run: docker-compose -f docker-compose.unified.yml up --build
+#   4. Open DevTools: http://localhost:3979/devtools
+
+version: '3.8'
+
+services:
+  # Copilot CLI Server - provides the CLI endpoint for SDK clients
+  copilot-cli-server:
+    build:
+      context: ./services/cli
+      dockerfile: Dockerfile
+    environment:
+      - COPILOT_GITHUB_TOKEN=${COPILOT_GITHUB_TOKEN}
+    ports:
+      - "3000:3000"
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "nc", "-z", "localhost", "3000"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 10s
+    networks:
+      - copilot-network
+
+  # Teams Copilot Agent - the unified bot service
+  teams-copilot-agent:
+    build:
+      context: .
+      dockerfile: services/teams-copilot-agent/Dockerfile
+      args:
+        AGENT_PROFILE: ${AGENT_PROFILE:-}
+    environment:
+      - CLI_URL=copilot-cli-server:3000
+      - PORT=3978
+      - MODEL=${MODEL:-gpt-5.2}
+      - AGENT_NAME=${AGENT_NAME:-teams-copilot-agent}
+      - ENABLE_AUDIT=false
+      - NODE_ENV=development
+      - LOG_LEVEL=debug
+    ports:
+      - "3978:3978"
+      - "3979:3979"
+    depends_on:
+      copilot-cli-server:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "wget", "--no-verbose", "--tries=1", "--spider", "http://localhost:3978/"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 10s
+    volumes:
+      # Mount agent config for hot-reload during development.
+      # If AGENT_PROFILE is set, mount from agents/<profile>/, otherwise from service defaults.
+      # At runtime you can also override via SYSTEM_PROMPT_PATH / TOOLS_CONFIG_PATH env vars.
+      - ${AGENT_PROFILE:+./agents/${AGENT_PROFILE}/system-prompt.md}${AGENT_PROFILE:-./services/teams-copilot-agent/system-prompt.md}:/app/system-prompt.md:ro
+      - ${AGENT_PROFILE:+./agents/${AGENT_PROFILE}/tools-config.json}${AGENT_PROFILE:-./services/teams-copilot-agent/tools-config.json}:/app/tools-config.json:ro
+    networks:
+      - copilot-network
+
+  # DevTools - Browser-based testing interface
+  devtools:
+    image: node:24-alpine
+    working_dir: /app
+    command: >
+      sh -c "
+        npm init -y &&
+        npm install express @github/copilot-sdk &&
+        cat > server.js << 'EOF'
+      const express = require('express');
+      const app = express();
+      const port = 3979;
+      
+      app.use(express.json());
+      app.use(express.static('public'));
+      
+      // Proxy to Teams Copilot Agent
+      app.post('/api/chat', async (req, res) => {
+        try {
+          const response = await fetch('http://teams-copilot-agent:3978/api/chat', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify(req.body)
+          });
+          const data = await response.json();
+          res.json(data);
+        } catch (error) {
+          res.status(500).json({ error: error.message });
+        }
+      });
+      
+      // DevTools UI
+      app.get('/devtools', (req, res) => {
+        res.send(\`
+      <!DOCTYPE html>
+      <html>
+      <head>
+        <title>Teams Copilot Agent DevTools</title>
+        <style>
+          body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif; max-width: 800px; margin: 50px auto; padding: 20px; }
+          h1 { color: #6264A7; }
+          #chat { border: 1px solid #ccc; padding: 20px; height: 400px; overflow-y: auto; margin-bottom: 20px; border-radius: 8px; }
+          .message { margin: 10px 0; padding: 10px; border-radius: 8px; }
+          .user { background: #E8EBFA; text-align: right; }
+          .assistant { background: #F3F4F6; }
+          #input { width: calc(100% - 100px); padding: 10px; border: 1px solid #ccc; border-radius: 4px; }
+          #send { padding: 10px 20px; background: #6264A7; color: white; border: none; border-radius: 4px; cursor: pointer; }
+          #send:hover { background: #4F52B2; }
+          .loading { opacity: 0.5; }
+        </style>
+      </head>
+      <body>
+        <h1>🤖 Teams Copilot Agent DevTools</h1>
+        <p>Test your agent locally before deploying to Azure.</p>
+        <div id=\"chat\"></div>
+        <input type=\"text\" id=\"input\" placeholder=\"Type a message...\" onkeypress=\"if(event.key==='Enter')sendMessage()\">
+        <button id=\"send\" onclick=\"sendMessage()\">Send</button>
+        <script>
+          const chat = document.getElementById('chat');
+          const input = document.getElementById('input');
+          
+          async function sendMessage() {
+            const message = input.value.trim();
+            if (!message) return;
+            
+            chat.innerHTML += '<div class=\"message user\">' + message + '</div>';
+            input.value = '';
+            
+            const loadingDiv = document.createElement('div');
+            loadingDiv.className = 'message assistant loading';
+            loadingDiv.textContent = 'Thinking...';
+            chat.appendChild(loadingDiv);
+            chat.scrollTop = chat.scrollHeight;
+            
+            try {
+              const response = await fetch('/api/chat', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ message, userId: 'devtools-user', userName: 'Developer' })
+              });
+              const data = await response.json();
+              loadingDiv.className = 'message assistant';
+              loadingDiv.textContent = data.response || data.error || 'No response';
+            } catch (error) {
+              loadingDiv.className = 'message assistant';
+              loadingDiv.textContent = 'Error: ' + error.message;
+            }
+            chat.scrollTop = chat.scrollHeight;
+          }
+        </script>
+      </body>
+      </html>
+        \`);
+      });
+      
+      app.listen(port, () => console.log('DevTools running at http://localhost:' + port + '/devtools'));
+      EOF
+        node server.js
+      "
+    ports:
+      - "3979:3979"
+    depends_on:
+      teams-copilot-agent:
+        condition: service_healthy
+    networks:
+      - copilot-network
+
+networks:
+  copilot-network:
+    driver: bridge

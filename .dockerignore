@@ -1,0 +1,15 @@
+node_modules
+.git
+*.md
+!services/teams-copilot-agent/system-prompt.md
+!agents/**/system-prompt.md
+.github
+output
+tests
+dist
+*.test.ts
+*.test.mjs
+.vscode
+docker-compose*.yml
+scripts
+infra

@@ -1,0 +1,10 @@
+{
+  "description": "MCP tools for a versatile general-purpose assistant. All servers run locally with zero API keys required.",
+  "mcp_servers": {
+    "fetch": {
+      "tools": ["*"],
+      "command": "npx",
+      "args": ["-y", "@anthropic-ai/fetch-mcp@latest"]
+    }
+  }
+}
