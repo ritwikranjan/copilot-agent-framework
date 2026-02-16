@@ -6,6 +6,8 @@
  */
 
 import type { IAuditStore } from './interfaces.js';
+import type { ILogger } from './logger.js';
+import { getLogger } from './logger.js';
 import {
     Interaction,
     ToolExecution,
@@ -19,6 +21,8 @@ import {
 export interface AuditManagerOptions {
     /** Audit store implementation (required) */
     store: IAuditStore;
+    /** Optional custom logger (defaults to debug-based logger) */
+    logger?: ILogger;
 }
 
 /**
@@ -41,6 +45,7 @@ export interface AuditManagerOptions {
 export class AuditManager {
     private db: IAuditStore;
     private initialized = false;
+    private log: ILogger;
 
     private currentSessionId: string | null = null;
     private currentInteraction: Interaction | null = null;
@@ -48,6 +53,7 @@ export class AuditManager {
 
     constructor(options: AuditManagerOptions) {
         this.db = options.store;
+        this.log = options.logger ?? getLogger('audit');
     }
 
     /**
@@ -57,7 +63,7 @@ export class AuditManager {
         if (!this.initialized) {
             await this.db.initialize();
             this.initialized = true;
-            console.log('Audit Manager initialized.');
+            this.log.info('Initialized.');
         }
     }
 
@@ -69,7 +75,7 @@ export class AuditManager {
         this.currentSessionId = sessionId;
         this.currentInteraction = null;
         this.pendingToolExecutions.clear();
-        console.log(`Audit Manager: Session set to ${sessionId}`);
+        this.log.info('Session set to %s', sessionId);
     }
 
     /**
@@ -113,7 +119,7 @@ export class AuditManager {
         await this.db.createInteraction(interaction);
 
         this.currentInteraction = interaction;
-        console.log(`Started interaction: ${interaction.id} for query: ${userQuery.substring(0, 50)}...`);
+        this.log.info('Started interaction: %s for query: %s...', interaction.id, userQuery.substring(0, 50));
 
         return interaction.id;
     }
@@ -130,7 +136,7 @@ export class AuditManager {
         reasoning?: string
     ): Promise<Interaction | null> {
         if (!this.currentInteraction) {
-            console.warn('No active interaction to complete.');
+            this.log.warn('No active interaction to complete.');
             return null;
         }
 
@@ -144,7 +150,7 @@ export class AuditManager {
             this.currentInteraction
         );
 
-        console.log(`Completed interaction: ${this.currentInteraction.id}`);
+        this.log.info('Completed interaction: %s', this.currentInteraction.id);
 
         const completedInteraction = this.currentInteraction;
         this.currentInteraction = null;
@@ -188,7 +194,7 @@ export class AuditManager {
             this.currentInteraction.tool_execution_ids.push(toolExecution.id);
         }
 
-        console.log(`Tool execution started: ${toolExecution.id} - ${toolName}`);
+        this.log.info('Tool execution started: %s - %s', toolExecution.id, toolName);
 
         return toolExecution.id;
     }
@@ -209,7 +215,7 @@ export class AuditManager {
         const toolExecution = this.pendingToolExecutions.get(toolId);
 
         if (!toolExecution) {
-            console.warn(`Tool execution not found: ${toolId}`);
+            this.log.warn('Tool execution not found: %s', toolId);
             return null;
         }
 
@@ -229,7 +235,7 @@ export class AuditManager {
             toolExecution
         );
 
-        console.log(`Tool execution completed: ${toolId} - status: ${toolExecution.status}`);
+        this.log.info('Tool execution completed: %s - status: %s', toolId, toolExecution.status);
 
         return toolExecution;
     }

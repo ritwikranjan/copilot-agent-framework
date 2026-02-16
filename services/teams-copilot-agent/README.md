@@ -1,13 +1,13 @@
 # Teams Copilot Agent
 
-Unified Teams Bot service with direct GitHub Copilot SDK integration. This service uses the [`@copilot-cli-server/stateless-copilot-sdk`](../../packages/stateless-copilot-sdk/README.md) library for all Copilot SDK interaction, session management, and audit logging — adding Teams-specific bot framework integration and Cosmos DB persistence on top.
+Unified Teams Bot service with direct GitHub Copilot SDK integration. This service uses the [`@ritwikranjan/copilot-agent-framework`](../../packages/stateless-copilot-sdk/README.md) library for all Copilot SDK interaction, session management, and audit logging — adding Teams-specific bot framework integration and Cosmos DB persistence on top.
 
 For high-level architecture and deployment instructions, see the [Project Root README](../../README.md).
 
 ## Features
 
 - **Stateless Architecture**: Designed for horizontal scaling with session state persisted to Cosmos DB
-- **Direct SDK Integration**: Uses `@copilot-cli-server/stateless-copilot-sdk` which wraps `@github/copilot-sdk`
+- **Direct SDK Integration**: Uses `@ritwikranjan/copilot-agent-framework` which wraps `@github/copilot-sdk`
 - **Audit Logging**: Session tracking, interaction logging, and tool execution monitoring via Cosmos DB
 - **MCP Tools Support**: Configurable MCP servers for extended tool capabilities
 - **DevTools Support**: Local development with Teams DevTools plugin
@@ -33,7 +33,7 @@ This service is a thin Teams-specific layer on top of `stateless-copilot-sdk`:
 │  └────────────────────────────────────────────┘  │
 │                                                  │
 ├──────────────────────────────────────────────────┤
-│           @copilot-cli-server/stateless-copilot-sdk       │
+│           @ritwikranjan/copilot-agent-framework          │
 │                                                  │
 │  CopilotService · SessionManager · AuditManager  │
 │  Models · Interfaces · In-Memory Stores          │
@@ -165,7 +165,7 @@ services/teams-copilot-agent/
 └── .env.example
 ```
 
-> **Note:** Most types, interfaces, and core logic live in [`@copilot-cli-server/stateless-copilot-sdk`](../../packages/stateless-copilot-sdk/README.md). The `cosmos_integration/` files are thin re-exports plus the Cosmos DB implementations.
+> **Note:** Most types, interfaces, and core logic live in [`@ritwikranjan/copilot-agent-framework`](../../packages/stateless-copilot-sdk/README.md). The `cosmos_integration/` files are thin re-exports plus the Cosmos DB implementations.
 
 ## Testing
 

@@ -8,6 +8,8 @@
  */
 
 import type { ISessionStore } from './interfaces.js';
+import type { ILogger } from './logger.js';
+import { getLogger } from './logger.js';
 import {
     SessionInfo,
     SessionStatus,
@@ -24,6 +26,8 @@ export interface SessionResolveResult {
 export interface SessionManagerOptions {
     /** Session store implementation (required) */
     store: ISessionStore;
+    /** Optional custom logger (defaults to debug-based logger) */
+    logger?: ILogger;
 }
 
 export interface SessionResolveOptions {
@@ -62,9 +66,11 @@ export interface SessionStatusResult {
 export class SessionManager {
     private db: ISessionStore;
     private initialized = false;
+    private log: ILogger;
 
     constructor(options: SessionManagerOptions) {
         this.db = options.store;
+        this.log = options.logger ?? getLogger('session');
     }
 
     /**
@@ -74,7 +80,7 @@ export class SessionManager {
         if (!this.initialized) {
             await this.db.initialize();
             this.initialized = true;
-            console.log('[SessionManager] Initialized.');
+            this.log.info('Initialized.');
         }
     }
 
@@ -143,7 +149,7 @@ export class SessionManager {
                 );
             }
 
-            console.log(`[SessionManager] Resumed session by ID: ${sessionId}`);
+            this.log.info('Resumed session by ID: %s', sessionId);
             return { session, isNew: false };
         }
 
@@ -151,7 +157,7 @@ export class SessionManager {
         if (conversationId) {
             const existingSession = await this.db.getSessionByConversationId(userInfo.username, conversationId);
             if (existingSession && !this.isSessionExpired(existingSession)) {
-                console.log(`[SessionManager] Resumed session by conversationId: ${conversationId}, sessionId: ${existingSession.id}`);
+                this.log.info('Resumed session by conversationId: %s, sessionId: %s', conversationId, existingSession.id);
                 return { session: existingSession, isNew: false };
             }
 
@@ -163,7 +169,7 @@ export class SessionManager {
                 copilotSessionId
             });
             const createdSession = await this.db.createSession(newSession);
-            console.log(`[SessionManager] Created new session for conversation: ${conversationId}, sessionId: ${createdSession.id}`);
+            this.log.info('Created new session for conversation: %s, sessionId: %s', conversationId, createdSession.id);
             return { session: createdSession, isNew: true };
         }
 
@@ -171,21 +177,21 @@ export class SessionManager {
         if (sessionName) {
             const existingSession = await this.db.getSessionByName(userInfo.username, sessionName);
             if (existingSession && !this.isSessionExpired(existingSession)) {
-                console.log(`[SessionManager] Resumed session by name: ${sessionName}`);
+                this.log.info('Resumed session by name: %s', sessionName);
                 return { session: existingSession, isNew: false };
             }
 
             // Create new session with the provided name
             const newSession = createSessionInfo(userInfo, { name: sessionName, agentConfig, copilotSessionId });
             const createdSession = await this.db.createSession(newSession);
-            console.log(`[SessionManager] Created new session with name: ${sessionName}`);
+            this.log.info('Created new session with name: %s', sessionName);
             return { session: createdSession, isNew: true };
         }
 
         // Case 4: Neither provided - create new unnamed session
         const newSession = createSessionInfo(userInfo, { agentConfig, copilotSessionId });
         const createdSession = await this.db.createSession(newSession);
-        console.log(`[SessionManager] Created new unnamed session: ${createdSession.id}`);
+        this.log.info('Created new unnamed session: %s', createdSession.id);
         return { session: createdSession, isNew: true };
     }
 
@@ -248,7 +254,7 @@ export class SessionManager {
             session
         );
 
-        console.log(`[SessionManager] Updated copilot_session_id for session ${sessionId}`);
+        this.log.info('Updated copilot_session_id for session %s', sessionId);
         return updatedSession;
     }
 
@@ -318,7 +324,7 @@ export class SessionManager {
             session
         );
 
-        console.log(`[SessionManager] Renamed session ${sessionId} to '${newName}'`);
+        this.log.info('Renamed session %s to \'%s\'', sessionId, newName);
         return updatedSession;
     }
 
@@ -350,7 +356,7 @@ export class SessionManager {
             session
         );
 
-        console.log(`[SessionManager] Ended session ${sessionId} with status: ${status}`);
+        this.log.info('Ended session %s with status: %s', sessionId, status);
         return updatedSession;
     }
 

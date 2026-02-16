@@ -12,8 +12,8 @@ import {
     getSessionPartitionKey,
     getInteractionPartitionKey,
     getToolExecutionPartitionKey
-} from '@copilot-cli-server/stateless-copilot-sdk';
-import type { UserInfo, SessionInfo, Interaction, ToolExecution } from '@copilot-cli-server/stateless-copilot-sdk';
+} from '@ritwikranjan/copilot-agent-framework';
+import type { UserInfo, SessionInfo, Interaction, ToolExecution } from '@ritwikranjan/copilot-agent-framework';
 
 describe('Models', () => {
     const mockUserInfo: UserInfo = {

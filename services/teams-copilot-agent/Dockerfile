@@ -73,7 +73,7 @@ WORKDIR /app
 # Copy service package.json, strip the workspace dep (already bundled by tsup)
 COPY services/teams-copilot-agent/package.json ./package.json
 RUN apk add --no-cache jq && \
-    jq 'del(.dependencies["@copilot-cli-server/stateless-copilot-sdk"])' package.json > package.tmp.json && \
+    jq 'del(.dependencies["@ritwikranjan/copilot-agent-framework"])' package.json > package.tmp.json && \
     mv package.tmp.json package.json && \
     apk del jq
 

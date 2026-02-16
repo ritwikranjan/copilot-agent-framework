@@ -28,6 +28,8 @@ import type {
 import { SessionManager, SessionNotFoundError, SessionExpiredError, formatRemainingTime } from './session-manager.js';
 import type { SessionStatusResult } from './session-manager.js';
 import type { AuditManager } from './audit-manager.js';
+import type { ILogger } from './logger.js';
+import { getLogger } from './logger.js';
 
 // ============ Config Types ============
 
@@ -44,6 +46,8 @@ export interface CopilotServiceConfig {
     mcpServers?: MCPServerConfig[];
     /** Whether audit logging is enabled */
     enableAudit?: boolean;
+    /** Optional custom logger (defaults to debug-based logger) */
+    logger?: ILogger;
 }
 
 export interface SendMessageOptions {
@@ -70,17 +74,18 @@ export interface SendMessageOptions {
  * 5. Minimal fallback
  */
 export function loadSystemPrompt(options?: { envVar?: string; filePaths?: string[] }): string {
+    const log = getLogger('config');
     // 1. Check for inline system prompt from environment
     const envVar = options?.envVar || 'SYSTEM_PROMPT';
     if (process.env[envVar]) {
-        console.log(`Using system prompt from ${envVar} environment variable`);
+        log.info('Using system prompt from %s environment variable', envVar);
         return process.env[envVar]!;
     }
 
     // 2. Check for custom system prompt path
     const customPath = process.env.SYSTEM_PROMPT_PATH;
     if (customPath && existsSync(customPath)) {
-        console.log('Loaded system prompt from:', customPath);
+        log.info('Loaded system prompt from: %s', customPath);
         return readFileSync(customPath, 'utf-8');
     }
 
@@ -92,13 +97,13 @@ export function loadSystemPrompt(options?: { envVar?: string; filePaths?: string
 
     for (const filePath of filePaths) {
         if (existsSync(filePath)) {
-            console.log('Loaded system prompt from:', filePath);
+            log.info('Loaded system prompt from: %s', filePath);
             return readFileSync(filePath, 'utf-8');
         }
     }
 
     // 4. Use minimal default
-    console.warn('No system prompt found, using minimal default');
+    log.warn('No system prompt found, using minimal default');
     return 'You are a helpful AI assistant.';
 }
 
@@ -111,15 +116,16 @@ export function loadSystemPrompt(options?: { envVar?: string; filePaths?: string
  * 3. options.fallbackPaths or default paths
  */
 export function loadToolsConfig(options?: { configPath?: string; fallbackPaths?: string[] }): ToolsConfig | null {
+    const log = getLogger('config');
     const configPath = options?.configPath || process.env.TOOLS_CONFIG_PATH || '/app/tools-config.json';
 
     if (existsSync(configPath)) {
         try {
             const config = JSON.parse(readFileSync(configPath, 'utf-8')) as ToolsConfig;
-            console.log('Loaded tools config from:', configPath);
+            log.info('Loaded tools config from: %s', configPath);
             return config;
         } catch (error) {
-            console.warn('Failed to parse tools config:', (error as Error).message);
+            log.warn('Failed to parse tools config: %s', (error as Error).message);
         }
     }
 
@@ -132,10 +138,10 @@ export function loadToolsConfig(options?: { configPath?: string; fallbackPaths?:
         if (existsSync(fallbackPath)) {
             try {
                 const config = JSON.parse(readFileSync(fallbackPath, 'utf-8')) as ToolsConfig;
-                console.log('Loaded tools config from:', fallbackPath);
+                log.info('Loaded tools config from: %s', fallbackPath);
                 return config;
             } catch (error) {
-                console.warn('Failed to parse tools config:', (error as Error).message);
+                log.warn('Failed to parse tools config: %s', (error as Error).message);
             }
         }
     }
@@ -199,6 +205,7 @@ export class CopilotService {
     private config: CopilotServiceConfig;
     private sessionManager: SessionManager;
     private auditManager: AuditManager | null;
+    private log: ILogger;
 
     constructor(
         config: CopilotServiceConfig,
@@ -208,16 +215,15 @@ export class CopilotService {
         this.config = config;
         this.sessionManager = sessionManager;
         this.auditManager = auditManager ?? null;
+        this.log = config.logger ?? getLogger('service');
 
-        console.log('========================================');
-        console.log(`Copilot Service Initialized`);
-        console.log('========================================');
-        console.log(`CLI URL: ${this.config.cliUrl}`);
-        console.log(`Model: ${this.config.model}`);
-        console.log(`Agent: ${this.config.agentName}`);
-        console.log(`MCP Servers: ${this.config.mcpServers ? this.config.mcpServers.map(s => s.name).join(', ') : 'None'}`);
-        console.log(`Audit Enabled: ${this.config.enableAudit ?? true}`);
-        console.log('========================================');
+        this.log.info('Copilot Service Initialized — CLI: %s, Model: %s, Agent: %s, MCP: %s, Audit: %s',
+            this.config.cliUrl,
+            this.config.model,
+            this.config.agentName,
+            this.config.mcpServers ? this.config.mcpServers.map(s => s.name).join(', ') : 'None',
+            this.config.enableAudit ?? true
+        );
     }
 
     /** Get the service configuration */
@@ -312,7 +318,7 @@ export class CopilotService {
                         agent: this.config.agentName
                     };
                 }
-                console.error('Session resolution error:', error);
+                this.log.error('Session resolution error: %O', error);
                 // Continue without session if audit fails
             }
         }
@@ -328,8 +334,7 @@ export class CopilotService {
 
             copilotClient = new CopilotClient({ cliUrl: this.config.cliUrl });
 
-            // Debug: Log the system prompt being used
-            console.log('[Copilot System Prompt Preview]', this.config.systemPrompt?.substring(0, 200) + '...');
+            this.log.debug('System prompt preview: %s...', this.config.systemPrompt?.substring(0, 200));
 
             const sessionConfig: Record<string, unknown> = {
                 model: this.config.model,
@@ -344,13 +349,12 @@ export class CopilotService {
                 sessionConfig.mcpServers = this.config.mcpServers;
             }
 
-            console.log('[Copilot Session Config]', JSON.stringify({ ...sessionConfig, systemMessage: { mode: 'replace', content: '(truncated)' } }));
+            this.log.debug('Session config: %O', { ...sessionConfig, systemMessage: { mode: 'replace', content: '(truncated)' } });
 
             const copilotSession = await copilotClient.createSession(sessionConfig);
             const response = await copilotSession.sendAndWait({ prompt: message });
 
-            // Debug logging
-            console.log('[Copilot Response Debug]', JSON.stringify(response, null, 2));
+            this.log.debug('Response: %O', response);
 
             // Try multiple ways to extract content
             const data = response?.data as Record<string, unknown> | undefined;
@@ -368,7 +372,7 @@ export class CopilotService {
                 else if (respAny.text) content = respAny.text as string;
             }
 
-            console.log('[Copilot Extracted Content]', content || '(empty)');
+            this.log.debug('Extracted content: %s', content || '(empty)');
 
             // Complete audit interaction
             if (auditManager) {
@@ -383,7 +387,7 @@ export class CopilotService {
                 sessionId: session?.id
             };
         } catch (error) {
-            console.error('Copilot error:', error);
+            this.log.error('Copilot error: %O', error);
 
             // Log error to audit
             if (auditManager) {
@@ -443,7 +447,7 @@ export class CopilotService {
         // Check if session is expired
         const sessionStatus = await this.sessionManager.getSessionStatus(userInfo.username, conversationId);
         if (sessionStatus.exists && sessionStatus.expired) {
-            console.log(`[Session] Session expired for conversation ${conversationId}`);
+            this.log.info('Session expired for conversation %s', conversationId);
             // End the expired session
             await this.sessionManager.endSessionByConversationId(userInfo.username, conversationId);
 
@@ -468,10 +472,10 @@ export class CopilotService {
             session = result.session;
             isNewCopilotSession = result.isNew || !session.copilot_session_id;
 
-            console.log(`[Session] Resolved session: ${session.id}, isNew: ${result.isNew}, hasCopilotSessionId: ${!!session.copilot_session_id}`);
+            this.log.info('Resolved session: %s, isNew: %s, hasCopilotSessionId: %s', session.id, result.isNew, !!session.copilot_session_id);
         } catch (error) {
             if (error instanceof SessionNotFoundError || error instanceof SessionExpiredError) {
-                console.error('[Session Error]', error.message);
+                this.log.error('Session error: %s', error.message);
                 return {
                     success: false,
                     error: error.message,
@@ -480,7 +484,7 @@ export class CopilotService {
                     sessionExpired: error instanceof SessionExpiredError
                 };
             }
-            console.error('Session resolution error:', error);
+            this.log.error('Session resolution error: %O', error);
             throw error;
         }
 
@@ -501,7 +505,7 @@ export class CopilotService {
                 },
                 streaming: true,
                 onPermissionRequest: async (request: { kind: string; toolCallId?: string; [key: string]: unknown }) => {
-                    console.log('[Permission Request]', JSON.stringify(request, null, 2));
+                    this.log.debug('Permission request: %O', request);
                     return { kind: 'approved' as const };
                 }
             };
@@ -509,24 +513,24 @@ export class CopilotService {
             // Add MCP servers if configured
             if (this.config.mcpServers) {
                 sessionConfig.mcpServers = this.config.mcpServers;
-                console.log('[MCP Config] MCP servers being sent to session:', JSON.stringify(this.config.mcpServers, null, 2));
+                this.log.debug('MCP servers: %O', this.config.mcpServers);
             }
 
             // Try to resume existing Copilot session, or create new
             if (!isNewCopilotSession && session!.copilot_session_id) {
                 try {
-                    console.log(`[Session] Attempting to resume Copilot session: ${session!.copilot_session_id}`);
+                    this.log.info('Attempting to resume Copilot session: %s', session!.copilot_session_id);
                     copilotSession = await copilotClient.resumeSession(session!.copilot_session_id, sessionConfig);
-                    console.log(`[Session] Successfully resumed Copilot session: ${session!.copilot_session_id}`);
+                    this.log.info('Successfully resumed Copilot session: %s', session!.copilot_session_id);
                 } catch (resumeError) {
-                    console.warn(`[Session] Failed to resume Copilot session, creating new:`, resumeError);
+                    this.log.warn('Failed to resume Copilot session, creating new: %O', resumeError);
                     isNewCopilotSession = true;
                 }
             }
 
             // Create new session if needed
             if (!copilotSession) {
-                console.log(`[Session] Creating new Copilot session for conversation ${conversationId}`);
+                this.log.info('Creating new Copilot session for conversation %s', conversationId);
                 copilotSession = await copilotClient.createSession(sessionConfig);
 
                 if (!copilotSession) {
@@ -536,7 +540,7 @@ export class CopilotService {
                 // Store the Copilot session ID for future resume
                 if (session) {
                     const copilotSessionId = copilotSession.sessionId;
-                    console.log(`[Session] Storing Copilot session ID: ${copilotSessionId}`);
+                    this.log.info('Storing Copilot session ID: %s', copilotSessionId);
                     await this.sessionManager.updateCopilotSessionId(
                         userInfo.username,
                         session.id,
@@ -562,24 +566,22 @@ export class CopilotService {
 
             await new Promise<void>((resolve, reject) => {
                 timeoutId = setTimeout(() => {
-                    console.error('[Stream Timeout] Streaming timed out after', STREAM_TIMEOUT, 'ms');
+                    this.log.error('Streaming timed out after %d ms', STREAM_TIMEOUT);
                     reject(new Error('Streaming timed out'));
                 }, STREAM_TIMEOUT);
 
                 unsubscribe = copilotSession!.on((event: { type: string; data?: Record<string, unknown> }) => {
                     try {
-                        console.log('[Copilot Event] type:', event.type);
-                        console.log('[Copilot Event] data:', JSON.stringify(event.data, null, 2));
-                        console.log('----------------------------------------');
+                        this.log.debug('Event: %s, data: %O', event.type, event.data);
 
                         switch (event.type) {
                             case 'assistant.turn_start':
-                                console.log('[Turn Start]');
+                                this.log.debug('Turn start');
                                 hasContentInCurrentTurn = false;
                                 break;
 
                             case 'assistant.turn_end':
-                                console.log('[Turn End]');
+                                this.log.debug('Turn end');
                                 // Add newline separator between turns for clarity
                                 if (hasContentInCurrentTurn) {
                                     streamHandler.emit('\n\n');
@@ -591,13 +593,13 @@ export class CopilotService {
                                 // Streaming delta - extract deltaContent from the event data
                                 const deltaContent = event.data?.deltaContent as string | undefined;
                                 if (deltaContent) {
-                                    console.log('[Delta Content]', deltaContent);
+                                    this.log.debug('Delta: %s', deltaContent);
                                     responseContent += deltaContent;
                                     hasContentInCurrentTurn = true;
                                     // Stream directly for responsive UX
                                     streamHandler.emit(deltaContent);
                                 } else {
-                                    console.log('[Delta Content] No deltaContent found in event data');
+                                    this.log.debug('No deltaContent in event data');
                                 }
                                 break;
                             }
@@ -607,7 +609,7 @@ export class CopilotService {
                                 // Content was already streamed via deltas, this is just for logging
                                 const content = event.data?.content as string | undefined;
                                 if (content) {
-                                    console.log('[Final Message Content]', content.substring(0, 100) + '...');
+                                    this.log.debug('Final message: %s...', content.substring(0, 100));
                                 }
                                 break;
                             }
@@ -616,7 +618,7 @@ export class CopilotService {
                                 // Reasoning delta
                                 const reasoningDelta = event.data?.deltaContent as string | undefined;
                                 if (reasoningDelta) {
-                                    console.log('[Reasoning Delta]', reasoningDelta);
+                                    this.log.debug('Reasoning delta: %s', reasoningDelta);
                                     reasoningContent += reasoningDelta;
                                     // Optionally show reasoning as status updates
                                     if (options?.showReasoning) {
@@ -630,7 +632,7 @@ export class CopilotService {
                                 // Final complete reasoning - always sent regardless of streaming
                                 const reasoning = event.data?.content as string | undefined;
                                 if (reasoning) {
-                                    console.log('[Final Reasoning]', reasoning.substring(0, 100) + '...');
+                                    this.log.debug('Final reasoning: %s...', reasoning.substring(0, 100));
                                     if (!reasoningContent) {
                                         reasoningContent = reasoning;
                                     }
@@ -641,7 +643,7 @@ export class CopilotService {
                             case 'tool.execution_start': {
                                 const toolCallId = event.data?.toolCallId as string | undefined;
                                 const toolName = (event.data?.toolName || event.data?.name || 'unknown') as string;
-                                console.log('[Tool Start]', toolName, 'toolCallId:', toolCallId);
+                                this.log.info('Tool start: %s (toolCallId: %s)', toolName, toolCallId);
 
                                 // Emit tool usage as content so user can see it
                                 const toolMessage = `\n\n🔧 *Using tool: ${toolName}*\n\n`;
@@ -652,7 +654,7 @@ export class CopilotService {
                                 if (auditManager && toolCallId) {
                                     auditManager.logToolStart(toolName, event.data?.arguments as Record<string, unknown>)
                                         .then(auditToolId => pendingTools.set(toolCallId, { auditToolId, toolName }))
-                                        .catch(err => console.error('Audit tool start error:', err));
+                                        .catch(err => this.log.error('Audit tool start error: %O', err));
                                 }
                                 break;
                             }
@@ -661,7 +663,7 @@ export class CopilotService {
                                 // Tool execution progress - show to user
                                 const progressMessage = event.data?.progressMessage as string | undefined;
                                 if (progressMessage) {
-                                    console.log('[Tool Progress]', progressMessage);
+                                    this.log.debug('Tool progress: %s', progressMessage);
                                     const formattedProgress = `📋 *${progressMessage}*\n`;
                                     streamHandler.emit(formattedProgress);
                                     responseContent += formattedProgress;
@@ -674,38 +676,37 @@ export class CopilotService {
                                 const pendingTool = toolCallId ? pendingTools.get(toolCallId) : undefined;
                                 const toolName = pendingTool?.toolName || 'unknown';
                                 const success = event.data?.success as boolean | undefined;
-                                console.log('[Tool Complete]', toolName, 'toolCallId:', toolCallId, 'success:', success);
+                                this.log.info('Tool complete: %s (toolCallId: %s, success: %s)', toolName, toolCallId, success);
 
                                 // Log tool complete to audit
                                 if (auditManager && toolCallId && pendingTool) {
                                     pendingTools.delete(toolCallId);
                                     auditManager.logToolComplete(pendingTool.auditToolId, event.data?.result)
-                                        .catch(err => console.error('Audit tool complete error:', err));
+                                        .catch(err => this.log.error('Audit tool complete error: %O', err));
                                 }
                                 break;
                             }
 
                             case 'session.idle':
-                                console.log('[Session] Idle - streaming complete');
+                                this.log.debug('Session idle — streaming complete');
                                 if (timeoutId) clearTimeout(timeoutId);
                                 resolve();
                                 break;
 
                             case 'session.error': {
                                 const errorMessage = (event.data?.message || event.data?.error || 'Unknown session error') as string;
-                                console.error('[Session Error]', errorMessage);
+                                this.log.error('Session error: %s', errorMessage);
                                 if (timeoutId) clearTimeout(timeoutId);
                                 reject(new Error(errorMessage));
                                 break;
                             }
 
                             default:
-                                // Log unknown event types for debugging
-                                console.log('[Unknown Event Type]', event.type);
+                                this.log.debug('Unknown event type: %s', event.type);
                                 break;
                         }
                     } catch (error) {
-                        console.error('[Event Processing Error]', error);
+                        this.log.error('Event processing error: %O', error);
                     }
                 });
 
@@ -739,7 +740,7 @@ export class CopilotService {
             };
 
         } catch (error) {
-            console.error('Streaming error:', error);
+            this.log.error('Streaming error: %O', error);
 
             // Log error to audit
             if (auditManager) {

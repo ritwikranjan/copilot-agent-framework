@@ -1,11 +1,11 @@
-# @copilot-cli-server/stateless-copilot-sdk
+# @ritwikranjan/copilot-agent-framework
 
-Framework-agnostic library for building services on top of the GitHub Copilot SDK. Provides session management, audit logging, streaming, and pluggable persistence — with zero Azure or Teams dependencies.
+Framework-agnostic library for building stateless agents on top of the GitHub Copilot SDK. Provides session management, audit logging, streaming, and pluggable persistence — with zero Azure or Teams dependencies. Built for horizontal scaling.
 
 ## Installation
 
 ```bash
-npm install @copilot-cli-server/stateless-copilot-sdk
+npm install @ritwikranjan/copilot-agent-framework @github/copilot-sdk
 ```
 
 Or as a workspace dependency (within this monorepo):
@@ -13,7 +13,7 @@ Or as a workspace dependency (within this monorepo):
 ```json
 {
   "dependencies": {
-    "@copilot-cli-server/stateless-copilot-sdk": "*"
+    "@ritwikranjan/copilot-agent-framework": "*"
   }
 }
 ```
@@ -26,7 +26,7 @@ import {
   SessionManager,
   InMemorySessionStore,
   loadSystemPrompt,
-} from '@copilot-cli-server/stateless-copilot-sdk';
+} from '@ritwikranjan/copilot-agent-framework';
 
 // 1. Create a session store (in-memory for dev, or your own DB implementation)
 const sessionStore = new InMemorySessionStore();
@@ -58,7 +58,7 @@ console.log(response.response);
 ### Streaming
 
 ```typescript
-import type { IStreamHandler } from '@copilot-cli-server/stateless-copilot-sdk';
+import type { IStreamHandler } from '@ritwikranjan/copilot-agent-framework';
 
 // Implement the generic stream handler for your framework
 const streamHandler: IStreamHandler = {
@@ -80,7 +80,7 @@ await copilot.sendMessageStreaming(
 import {
   AuditManager,
   InMemoryAuditStore,
-} from '@copilot-cli-server/stateless-copilot-sdk';
+} from '@ritwikranjan/copilot-agent-framework';
 
 const auditStore = new InMemoryAuditStore();
 const auditManager = new AuditManager({ store: auditStore });
@@ -95,6 +95,41 @@ const copilot = new CopilotService(
   sessionManager,
   auditManager, // optional third argument
 );
+```
+
+### Logging
+
+The library is **silent by default** — no console.log output. Logs use the [`debug`](https://www.npmjs.com/package/debug) package under the hood.
+
+**Enable via environment variable:**
+
+```bash
+DEBUG=copilot:*              # All logs
+DEBUG=copilot:session        # Session manager only
+DEBUG=copilot:audit          # Audit manager only
+DEBUG=copilot:service        # CopilotService only
+```
+
+**Or inject a custom logger:**
+
+```typescript
+import { setLogger } from '@ritwikranjan/copilot-agent-framework';
+
+// Route all SDK logs through your app's logger (e.g., winston, pino)
+setLogger({
+  debug: (msg, ...args) => myLogger.debug(msg, ...args),
+  info:  (msg, ...args) => myLogger.info(msg, ...args),
+  warn:  (msg, ...args) => myLogger.warn(msg, ...args),
+  error: (msg, ...args) => myLogger.error(msg, ...args),
+});
+```
+
+You can also pass a logger per-component:
+
+```typescript
+const sessionManager = new SessionManager({ store: myStore, logger: myLogger });
+const auditManager = new AuditManager({ store: myStore, logger: myLogger });
+const copilot = new CopilotService({ ...config, logger: myLogger }, sessionManager);
 ```
 
 ## API Reference
@@ -126,6 +161,7 @@ interface CopilotServiceConfig {
   systemPrompt?: string;    // System prompt content
   mcpServers?: MCPServerConfig[];  // MCP server configurations
   enableAudit?: boolean;    // Enable audit logging (default: true)
+  logger?: ILogger;         // Custom logger (default: debug-based, silent)
 }
 ```
 
@@ -257,7 +293,7 @@ import {
   InMemorySessionStore,
   InMemoryAuditStore,
   loadSystemPrompt,
-} from '@copilot-cli-server/stateless-copilot-sdk';
+} from '@ritwikranjan/copilot-agent-framework';
 
 const app = express();
 app.use(express.json());

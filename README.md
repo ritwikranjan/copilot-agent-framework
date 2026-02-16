@@ -63,7 +63,7 @@ SDK Client ─────────TCP:3000─────────▶ CLI
 
 ```powershell
 # Clone and navigate to the project
-cd copilot-cli-server
+cd copilot-agent-framework
 
 # Login to Azure
 az login
@@ -93,7 +93,7 @@ docker-compose -f docker-compose.unified.yml logs -f teams-copilot-agent
 ## Project Structure
 
 ```file
-copilot-cli-server/
+copilot-agent-framework/
 ├── packages/
 │   └── stateless-copilot-sdk/             # Reusable Copilot SDK library
 │       ├── src/

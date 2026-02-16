@@ -16,7 +16,7 @@
   "dependencies": {
     "@azure/cosmos": "^4.2.0",
     "@azure/identity": "^4.5.0",
-    "@copilot-cli-server/stateless-copilot-sdk": "*",
+    "@ritwikranjan/copilot-agent-framework": "*",
     "@github/copilot-sdk": "^0.1.20",
     "@microsoft/teams.api": "latest",
     "@microsoft/teams.apps": "latest",

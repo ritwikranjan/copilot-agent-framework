@@ -11,8 +11,8 @@
 
 import { CosmosClient, Database, Container, PartitionKeyDefinition } from '@azure/cosmos';
 import { ManagedIdentityCredential, DefaultAzureCredential } from '@azure/identity';
-import type { SessionInfo, Interaction, ToolExecution } from '@copilot-cli-server/stateless-copilot-sdk';
-import type { ISessionStore, IAuditStore } from '@copilot-cli-server/stateless-copilot-sdk';
+import type { SessionInfo, Interaction, ToolExecution } from '@ritwikranjan/copilot-agent-framework';
+import type { ISessionStore, IAuditStore } from '@ritwikranjan/copilot-agent-framework';
 
 // Cosmos DB Configuration (from the environment variables)
 const COSMOS_ACCOUNT_NAME = process.env.COSMOS_ACCOUNT_NAME;

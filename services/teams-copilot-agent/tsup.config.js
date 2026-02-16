@@ -9,7 +9,7 @@ export default defineConfig({
   target: 'node22',
   splitting: false,
   minify: false,
-  noExternal: ['@copilot-cli-server/stateless-copilot-sdk'],
+  noExternal: ['@ritwikranjan/copilot-agent-framework'],
   external: [
     '@azure/cosmos',
     '@azure/identity',

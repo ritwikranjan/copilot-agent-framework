@@ -1,5 +1,5 @@
 /**
- * Copilot Service - Teams-specific wrapper around @copilot-cli-server/stateless-copilot-sdk.
+ * Copilot Service - Teams-specific wrapper around @ritwikranjan/copilot-agent-framework.
  *
  * Delegates to the library's CopilotService class while providing:
  * - Teams IStreamer -> IStreamHandler adaptation
@@ -13,19 +13,19 @@ import {
     loadSystemPrompt,
     loadToolsConfig,
     buildMcpServersConfig,
-} from '@copilot-cli-server/stateless-copilot-sdk';
+} from '@ritwikranjan/copilot-agent-framework';
 import type {
     IStreamHandler,
     CopilotResponse,
     SessionStatusResult,
     UserInfo,
     SessionInfo,
-} from '@copilot-cli-server/stateless-copilot-sdk';
+} from '@ritwikranjan/copilot-agent-framework';
 import type { IStreamer } from '@microsoft/teams.apps';
 import { getSessionManager, getAuditManager } from './cosmos_integration/index.js';
 
 // Re-export types for consumers
-export type { CopilotResponse, SessionStatusResult } from '@copilot-cli-server/stateless-copilot-sdk';
+export type { CopilotResponse, SessionStatusResult } from '@ritwikranjan/copilot-agent-framework';
 
 // Configuration
 const CLI_URL = process.env.CLI_URL || 'localhost:3000';

@@ -1,7 +1,7 @@
 {
-  "name": "copilot-cli-server",
+  "name": "copilot-agent-framework",
   "version": "1.0.0",
-  "description": "GitHub Copilot CLI server deployed on Azure Container Apps",
+  "description": "Framework for building stateless GitHub Copilot agents at scale — with session management, audit logging, and pluggable persistence",
   "type": "module",
   "workspaces": [
     "packages/*",
@@ -10,22 +10,20 @@
   "scripts": {
     "test:connection": "node scripts/test-connection.mjs"
   },
-  "dependencies": {
-    "@github/copilot-sdk": "^0.1.20"
-  },
   "engines": {
     "node": ">=22.0.0"
   },
   "keywords": [
     "copilot",
     "github",
-    "cli",
+    "agent-framework",
+    "stateless",
     "azure",
     "container-apps"
   ],
   "repository": {
     "type": "git",
-    "url": "https://github.com/your-org/copilot-cli-server"
+    "url": "https://github.com/ritwikranjan/copilot-agent-framework"
   },
   "license": "MIT"
 }

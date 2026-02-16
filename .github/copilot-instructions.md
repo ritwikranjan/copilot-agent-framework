@@ -16,7 +16,7 @@ This project deploys GitHub Copilot CLI as a remote TCP server on Azure Containe
 ### Key Technologies
 - **Runtime**: Node.js 24+ (CLI), Node.js 22+ (Agent)
 - **Teams Bot**: `@microsoft/teams.apps` modular SDKs
-- **SDK Library**: `@copilot-cli-server/stateless-copilot-sdk` (workspace package)
+- **SDK Library**: `@ritwikranjan/copilot-agent-framework` (workspace package)
 - **Container**: Docker with Alpine Linux / Debian Slim
 - **Infrastructure**: Azure Container Apps with TCP/HTTP ingress
 - **IaC**: Bicep templates
@@ -47,7 +47,7 @@ This project deploys GitHub Copilot CLI as a remote TCP server on Azure Containe
 ## Directory Structure
 
 ```
-copilot-cli-server/
+copilot-agent-framework/
 ├── packages/
 │   └── stateless-copilot-sdk/       # Framework-agnostic Copilot SDK wrapper
 │       ├── src/

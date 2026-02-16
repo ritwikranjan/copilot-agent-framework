@@ -4,7 +4,7 @@
  * This module provides auditing capabilities for AI agent sessions,
  * including session tracking, interaction logging, and tool execution monitoring.
  * 
- * Re-exports types and classes from @copilot-cli-server/stateless-copilot-sdk,
+ * Re-exports types and classes from @ritwikranjan/copilot-agent-framework,
  * plus local Cosmos DB and mock implementations.
  */
 
@@ -22,10 +22,10 @@ export {
     getSessionPartitionKey,
     getInteractionPartitionKey,
     getToolExecutionPartitionKey
-} from '@copilot-cli-server/stateless-copilot-sdk';
+} from '@ritwikranjan/copilot-agent-framework';
 
 // Interfaces (from library)
-export type { ISessionStore, IAuditStore } from '@copilot-cli-server/stateless-copilot-sdk';
+export type { ISessionStore, IAuditStore } from '@ritwikranjan/copilot-agent-framework';
 
 // Session Manager (from library)
 export {
@@ -34,18 +34,18 @@ export {
     SessionExpiredError,
     SessionNameConflictError,
     formatRemainingTime
-} from '@copilot-cli-server/stateless-copilot-sdk';
+} from '@ritwikranjan/copilot-agent-framework';
 
 export type {
     SessionResolveResult,
     SessionResolveOptions,
     SessionStatusResult,
     SessionManagerOptions
-} from '@copilot-cli-server/stateless-copilot-sdk';
+} from '@ritwikranjan/copilot-agent-framework';
 
 // Audit Manager (from library)
-export { AuditManager } from '@copilot-cli-server/stateless-copilot-sdk';
-export type { AuditManagerOptions } from '@copilot-cli-server/stateless-copilot-sdk';
+export { AuditManager } from '@ritwikranjan/copilot-agent-framework';
+export type { AuditManagerOptions } from '@ritwikranjan/copilot-agent-framework';
 
 // Cosmos DB Stores (local implementations)
 export {
@@ -66,7 +66,7 @@ import {
     AuditManager,
     InMemorySessionStore,
     InMemoryAuditStore,
-} from '@copilot-cli-server/stateless-copilot-sdk';
+} from '@ritwikranjan/copilot-agent-framework';
 import { getSessionCosmosStore, getAuditCosmosStore } from './db.js';
 
 const USE_COSMOS = !!(process.env.COSMOS_ENDPOINT || process.env.COSMOS_ACCOUNT_NAME);

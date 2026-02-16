@@ -1,9 +1,19 @@
 /**
- * @copilot-cli-server/stateless-copilot-sdk
+ * @ritwikranjan/copilot-agent-framework
  * 
  * Framework-agnostic Copilot SDK wrapper with session management,
  * audit logging, and pluggable persistence.
  */
+
+// ============ Logger ============
+export {
+    setLogger,
+    getLogger,
+} from './logger.js';
+
+export type {
+    ILogger,
+} from './logger.js';
 
 // ============ Models and Types ============
 export {

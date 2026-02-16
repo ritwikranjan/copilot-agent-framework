@@ -9,8 +9,8 @@
  * SessionCosmosStore and AuditCosmosStore separately.
  */
 
-import type { ISessionStore, IAuditStore } from '@copilot-cli-server/stateless-copilot-sdk';
-import type { SessionInfo, Interaction, ToolExecution } from '@copilot-cli-server/stateless-copilot-sdk';
+import type { ISessionStore, IAuditStore } from '@ritwikranjan/copilot-agent-framework';
+import type { SessionInfo, Interaction, ToolExecution } from '@ritwikranjan/copilot-agent-framework';
 
 /**
  * In-memory implementation of ISessionStore & IAuditStore for testing purposes.
