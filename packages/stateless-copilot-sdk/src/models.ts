@@ -141,7 +141,7 @@ export interface IStreamHandler {
 
 // ============ Constants ============
 
-// Session expiration time (12 hours in milliseconds)
+// Default session expiration time (12 hours in milliseconds)
 export const SESSION_EXPIRATION_MS = 12 * 60 * 60 * 1000;
 
 // ============ Factory Functions ============
@@ -153,6 +153,8 @@ export function createSessionInfo(
         agentConfig?: Record<string, unknown>;
         conversationId?: string;
         copilotSessionId?: string;
+        /** Session expiration duration in milliseconds (default: SESSION_EXPIRATION_MS / 12 hours) */
+        expirationMs?: number;
     }
 ): SessionInfo {
     const now = new Date();
@@ -165,7 +167,7 @@ export function createSessionInfo(
         agent_config: options?.agentConfig,
         copilot_session_id: options?.copilotSessionId,
         conversation_id: options?.conversationId,
-        expires_at: new Date(now.getTime() + SESSION_EXPIRATION_MS).toISOString(),
+        expires_at: new Date(now.getTime() + (options?.expirationMs ?? SESSION_EXPIRATION_MS)).toISOString(),
         last_activity_at: now.toISOString()
     };
 }

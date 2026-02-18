@@ -13,6 +13,7 @@ import { getLogger } from './logger.js';
 import {
     SessionInfo,
     SessionStatus,
+    SESSION_EXPIRATION_MS,
     UserInfo,
     createSessionInfo,
     getSessionPartitionKey
@@ -28,6 +29,8 @@ export interface SessionManagerOptions {
     store: ISessionStore;
     /** Optional custom logger (defaults to debug-based logger) */
     logger?: ILogger;
+    /** Session expiration duration in milliseconds (default: 12 hours) */
+    sessionExpirationMs?: number;
 }
 
 export interface SessionResolveOptions {
@@ -67,10 +70,12 @@ export class SessionManager {
     private db: ISessionStore;
     private initialized = false;
     private log: ILogger;
+    private sessionExpirationMs: number;
 
     constructor(options: SessionManagerOptions) {
         this.db = options.store;
         this.log = options.logger ?? getLogger('session');
+        this.sessionExpirationMs = options.sessionExpirationMs ?? SESSION_EXPIRATION_MS;
     }
 
     /**
@@ -166,7 +171,8 @@ export class SessionManager {
                 name: sessionName,
                 agentConfig,
                 conversationId,
-                copilotSessionId
+                copilotSessionId,
+                expirationMs: this.sessionExpirationMs
             });
             const createdSession = await this.db.createSession(newSession);
             this.log.info('Created new session for conversation: %s, sessionId: %s', conversationId, createdSession.id);
@@ -182,14 +188,14 @@ export class SessionManager {
             }
 
             // Create new session with the provided name
-            const newSession = createSessionInfo(userInfo, { name: sessionName, agentConfig, copilotSessionId });
+            const newSession = createSessionInfo(userInfo, { name: sessionName, agentConfig, copilotSessionId, expirationMs: this.sessionExpirationMs });
             const createdSession = await this.db.createSession(newSession);
             this.log.info('Created new session with name: %s', sessionName);
             return { session: createdSession, isNew: true };
         }
 
         // Case 4: Neither provided - create new unnamed session
-        const newSession = createSessionInfo(userInfo, { agentConfig, copilotSessionId });
+        const newSession = createSessionInfo(userInfo, { agentConfig, copilotSessionId, expirationMs: this.sessionExpirationMs });
         const createdSession = await this.db.createSession(newSession);
         this.log.info('Created new unnamed session: %s', createdSession.id);
         return { session: createdSession, isNew: true };

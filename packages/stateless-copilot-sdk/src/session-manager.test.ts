@@ -326,4 +326,47 @@ describe('SessionManager', () => {
             expect(result).toBeNull();
         });
     });
+
+    describe('custom sessionExpirationMs', () => {
+        it('should use custom expiration when configured on SessionManager', async () => {
+            const customMs = 2 * 60 * 60 * 1000; // 2 hours
+            const customManager = new SessionManager({
+                store,
+                sessionExpirationMs: customMs
+            });
+
+            const before = Date.now();
+            const { session } = await customManager.resolveSession(userInfo, {
+                conversationId: 'conv-custom-exp'
+            });
+            const after = Date.now();
+
+            const expiresAt = new Date(session.expires_at!).getTime();
+            expect(expiresAt).toBeGreaterThanOrEqual(before + customMs);
+            expect(expiresAt).toBeLessThanOrEqual(after + customMs);
+        });
+
+        it('should expire session after custom duration', async () => {
+            vi.useFakeTimers();
+            const customMs = 2 * 60 * 60 * 1000; // 2 hours
+            const customManager = new SessionManager({
+                store,
+                sessionExpirationMs: customMs
+            });
+
+            const created = await customManager.resolveSession(userInfo, {
+                conversationId: 'conv-custom-exp2'
+            });
+
+            // Advance past custom expiration
+            vi.advanceTimersByTime(customMs + 1000);
+
+            const result = await customManager.resolveSession(userInfo, {
+                conversationId: 'conv-custom-exp2'
+            });
+
+            expect(result.isNew).toBe(true);
+            expect(result.session.id).not.toBe(created.session.id);
+        });
+    });
 });

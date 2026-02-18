@@ -453,7 +453,7 @@ export class CopilotService {
 
             return {
                 success: false,
-                error: 'Your session has expired after 12 hours. Please send `/resume` to start a new session and continue, or `/new-session` to start fresh.',
+                error: 'Your session has expired. Please send `/resume` to start a new session and continue, or `/new-session` to start fresh.',
                 model: this.config.model,
                 agent: this.config.agentName,
                 sessionExpired: true

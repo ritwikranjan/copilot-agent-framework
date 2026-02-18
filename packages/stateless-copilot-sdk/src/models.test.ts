@@ -65,13 +65,24 @@ describe('Models', () => {
             const before = Date.now();
             const session = createSessionInfo(mockUserInfo);
             const after = Date.now();
-            
+
             const expiresAt = new Date(session.expires_at!).getTime();
             const expectedMin = before + (12 * 60 * 60 * 1000);
             const expectedMax = after + (12 * 60 * 60 * 1000);
-            
+
             expect(expiresAt).toBeGreaterThanOrEqual(expectedMin);
             expect(expiresAt).toBeLessThanOrEqual(expectedMax);
+        });
+
+        it('should use custom expirationMs when provided', () => {
+            const customMs = 2 * 60 * 60 * 1000; // 2 hours
+            const before = Date.now();
+            const session = createSessionInfo(mockUserInfo, { expirationMs: customMs });
+            const after = Date.now();
+
+            const expiresAt = new Date(session.expires_at!).getTime();
+            expect(expiresAt).toBeGreaterThanOrEqual(before + customMs);
+            expect(expiresAt).toBeLessThanOrEqual(after + customMs);
         });
 
         it('should generate unique IDs for each session', () => {

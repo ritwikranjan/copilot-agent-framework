@@ -167,10 +167,19 @@ interface CopilotServiceConfig {
 
 ### SessionManager
 
-Manages session lifecycle with pluggable persistence.
+Manages session lifecycle with pluggable persistence. Sessions expire after 12 hours by default.
 
 ```typescript
 new SessionManager({ store: ISessionStore })
+```
+
+Configure a custom session expiration:
+
+```typescript
+const sessionManager = new SessionManager({
+    store: sessionStore,
+    sessionExpirationMs: 4 * 60 * 60 * 1000, // 4 hours (default: 12 hours)
+});
 ```
 
 | Method | Description |

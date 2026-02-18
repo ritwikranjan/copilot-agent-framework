@@ -11,12 +11,13 @@
       "types": "./dist/index.d.ts"
     }
   },
-  "files": ["dist", "LICENSE", "README.md"],
+  "files": ["dist", "LICENSE", "README.md", "CHANGELOG.md"],
   "scripts": {
     "clean": "rimraf dist",
     "build": "tsup",
     "test": "vitest run",
-    "test:watch": "vitest"
+    "test:watch": "vitest",
+    "prepublishOnly": "npm run clean && npm run build && npm run test"
   },
   "dependencies": {
     "debug": "^4.4.0",
