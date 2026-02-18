@@ -12,4 +12,5 @@ dist
 .vscode
 docker-compose*.yml
 scripts
+!services/cli/scripts/*.sh
 infra

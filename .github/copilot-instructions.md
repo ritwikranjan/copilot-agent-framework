@@ -51,13 +51,17 @@ copilot-agent-framework/
 ├── packages/
 │   └── stateless-copilot-sdk/       # Framework-agnostic Copilot SDK wrapper
 │       ├── src/
+│       │   ├── index.ts             # Public API barrel export
 │       │   ├── copilot-service.ts   # CopilotService class
 │       │   ├── session-manager.ts   # Stateless session lifecycle
 │       │   ├── audit-manager.ts     # Interaction & tool logging
-│       │   ├── models.ts            # Shared types & models
+│       │   ├── models.ts            # Shared types, models & factory functions
 │       │   ├── interfaces.ts        # ISessionStore, IAuditStore
-│       │   └── stores/              # In-memory test implementations
+│       │   ├── logger.ts            # ILogger interface & debug-based default
+│       │   ├── stores/              # In-memory test implementations
+│       │   └── *.test.ts            # Co-located unit tests (vitest)
 │       ├── package.json
+│       ├── CHANGELOG.md
 │       └── README.md
 ├── services/
 │   ├── cli/                         # CLI Server service
@@ -88,7 +92,15 @@ copilot-agent-framework/
 │       ├── teams-copilot-agent.bicep
 │       ├── bot-service.bicep
 │       ├── cosmos-db.bicep
-│       └── ...
+│       ├── container-app.bicep      # CLI server (TCP)
+│       ├── container-app-env.bicep  # Container Apps environment
+│       ├── vnet.bicep               # VNet with storage service endpoint
+│       ├── nfs-storage.bicep        # NFS Azure Files for CLI session persistence
+│       ├── private-dns-zone.bicep   # Private DNS for NFS endpoint
+│       ├── dns-a-record.bicep
+│       ├── teams-bot.bicep
+│       ├── api-service.bicep
+│       └── test-client.bicep
 ├── scripts/
 │   └── deploy-unified.ps1           # Unified deployment script
 ├── tests/
@@ -110,11 +122,23 @@ Previously three separate services (CLI server, base-api, teams-bot), now consol
 ### Why Stateless Copilot SDK as a Separate Package?
 - **Framework-agnostic**: No Azure or Teams dependencies in the library
 - **Horizontal scaling**: All session state externalized via `ISessionStore` / `IAuditStore`
+- **Configurable session expiration**: Default 12 hours, override via `SessionManagerOptions.sessionExpirationMs`
+- **Pluggable logging**: `ILogger` interface with `debug`-based default (silent unless `DEBUG=copilot:*`)
 - **Testable**: In-memory stores for unit tests; Cosmos DB stores for production
 - **Reusable**: Can build HTTP APIs, CLIs, or other integrations on top
 - **Split stores**: `SessionCosmosStore` and `AuditCosmosStore` are separate classes (SRP)
   - Sessions partitioned by `/user_info/username`
   - Interactions and tool executions partitioned by `/session_id`
+
+### Why NFS for CLI Session Storage?
+- The Copilot CLI server (`copilot --server`) persists session state to the filesystem at `/root/.copilot/session-state`
+- The SDK does **not** expose a pluggable storage interface for this — it's hardcoded to filesystem
+- Without shared storage, `resumeSession()` fails when a different container handles the next request
+- **Solution**: Mount Azure Files (NFS protocol) to all container replicas via `nfs-storage.bicep`
+- This creates a **two-tier persistence** architecture:
+  - **Tier 1 (Application)**: Session metadata + audit → Cosmos DB (via `ISessionStore`/`IAuditStore`)
+  - **Tier 2 (CLI Server)**: Copilot SDK session files → NFS mount (shared filesystem)
+- NFS is secured via private endpoint within the VNet
 
 ### Why Managed Identity for Bot?
 - No secrets to manage
@@ -187,16 +211,23 @@ System prompts can be customized at multiple levels:
 - Export useful outputs for script consumption
 
 ### Key Modules
-- `vnet.bicep` - VNet with /16 CIDR, /23 subnet
-- `container-app-env.bicep` - Container Apps environment
-- `container-app.bicep` - CLI server (TCP)
+- `vnet.bicep` - VNet with /16 CIDR, /23 subnet, storage service endpoint
+- `container-app-env.bicep` - Container Apps environment with NFS storage registration
+- `container-app.bicep` - CLI server (TCP) with NFS volume mount
 - `teams-copilot-agent.bicep` - Teams bot (HTTP)
 - `bot-service.bicep` - Azure Bot Service
 - `cosmos-db.bicep` - Audit database
+- `nfs-storage.bicep` - Premium FileStorage with NFS share and private endpoint
 
 ## Testing
 
-### Unit Tests
+### Unit Tests (SDK)
+```bash
+cd packages/stateless-copilot-sdk
+npm test
+```
+
+### Unit Tests (Teams Agent)
 ```bash
 cd services/teams-copilot-agent
 npm test

@@ -33,7 +33,7 @@ $RootDir = Split-Path -Parent $ScriptDir
 
 Write-Host "Building and pushing Docker image..." -ForegroundColor Cyan
 Write-Host "  ACR: $AcrName" -ForegroundColor Gray
-Write-Host "  Image: $ImageName:$ImageTag" -ForegroundColor Gray
+Write-Host "  Image: ${ImageName}:${ImageTag}" -ForegroundColor Gray
 
 # Login to ACR
 Write-Host ""
