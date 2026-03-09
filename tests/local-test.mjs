@@ -14,7 +14,7 @@
  * 
  * Environment Variables:
  *   API_URL - Base API service URL (default: http://localhost:8080)
- *   AZURE_CLIENT_ID - Azure AD app client ID (default: 87a8f0f7-46fc-4c9f-aebf-c3ff4a2aa191)
+ *   AZURE_CLIENT_ID - Azure AD app client ID (required)
  */
 
 import { exec } from 'child_process';
@@ -23,7 +23,11 @@ import { promisify } from 'util';
 const execAsync = promisify(exec);
 
 const API_URL = process.env.API_URL || 'http://localhost:8080';
-const AZURE_CLIENT_ID = process.env.AZURE_CLIENT_ID || '87a8f0f7-46fc-4c9f-aebf-c3ff4a2aa191';
+const AZURE_CLIENT_ID = process.env.AZURE_CLIENT_ID;
+if (!AZURE_CLIENT_ID) {
+    console.error('ERROR: AZURE_CLIENT_ID environment variable is required');
+    process.exit(1);
+}
 const AZURE_SCOPE = process.env.AZURE_SCOPE || `api://${AZURE_CLIENT_ID}/copilotApi`;
 
 console.log('========================================');

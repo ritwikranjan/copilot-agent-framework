@@ -36,8 +36,8 @@ services:
       - CLI_URL=copilot-cli-server:3000
       - PORT=8080
       - AZURE_TENANT_ID=${AZURE_TENANT_ID:-common}
-      - AZURE_CLIENT_ID=${AZURE_CLIENT_ID:-87a8f0f7-46fc-4c9f-aebf-c3ff4a2aa191}
-      - AZURE_AUDIENCE=${AZURE_AUDIENCE:-api://87a8f0f7-46fc-4c9f-aebf-c3ff4a2aa191}
+      - AZURE_CLIENT_ID=${AZURE_CLIENT_ID:?Set AZURE_CLIENT_ID in .env}
+      - AZURE_AUDIENCE=${AZURE_AUDIENCE:-api://${AZURE_CLIENT_ID}}
       - NODE_ENV=development
       - LOG_LEVEL=info
     ports:

@@ -32,11 +32,11 @@ Since Copilot CLI spawns MCP servers as subprocesses with different env vars, we
 
 ```powershell
 # Build and push
-az acr login --name acndev
-docker build -t acndev.azurecr.io/copilot-cli:v8 -f services/cli/Dockerfile services/cli --push
+az acr login --name <your-acr>
+docker build -t <your-acr>.azurecr.io/copilot-cli:latest -f services/cli/Dockerfile services/cli --push
 
 # Deploy
-az containerapp update -n copilot-unified-cli -g copilot-unified-rg --image acndev.azurecr.io/copilot-cli:v8
+az containerapp update -n copilot-unified-cli -g <your-resource-group> --image <your-acr>.azurecr.io/copilot-cli:latest
 ```
 
 ## Files

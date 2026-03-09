@@ -49,14 +49,17 @@ param agentName string = 'teams-copilot-agent'
 @description('Enable serverless Cosmos DB (recommended for dev/test)')
 param cosmosServerless bool = true
 
-@description('Azure Tenant ID (defaults to Microsoft)')
-param azureTenantId string = '72f988bf-86f1-41af-91ab-2d7cd011db47'
+@description('Azure Tenant ID for bot and identity configuration')
+param azureTenantId string
 
 @description('Minimum replicas for CLI server')
 param cliMinReplicas int = 1
 
 @description('Maximum replicas for CLI server')
 param cliMaxReplicas int = 3
+
+@description('Object ID of the principal to grant Cosmos DB reader access (for audit data access)')
+param cosmosReaderObjectId string = ''
 
 @description('Minimum replicas for Teams Copilot Agent')
 param agentMinReplicas int = 1
@@ -218,8 +221,7 @@ resource cosmosRoleAssignment 'Microsoft.DocumentDB/databaseAccounts/sqlRoleAssi
 
 // Cosmos DB Role Assignment for additional reader access
 // Grant "Cosmos DB Built-in Data Reader" role to the specified object ID for audit data access
-var cosmosReaderObjectId = '742a4fa1-0493-4c75-8e0d-133dccac52e1'
-resource cosmosReaderRoleAssignment 'Microsoft.DocumentDB/databaseAccounts/sqlRoleAssignments@2023-11-15' = {
+resource cosmosReaderRoleAssignment 'Microsoft.DocumentDB/databaseAccounts/sqlRoleAssignments@2023-11-15' = if (!empty(cosmosReaderObjectId)) {
   name: guid(cosmosAccountName, cosmosReaderObjectId, 'cosmos-reader')
   parent: existingCosmosAccount
   properties: {

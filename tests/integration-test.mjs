@@ -19,7 +19,7 @@
  * 
  * Environment Variables:
  *   API_URL - API service URL (alternative to --api-url)
- *   AZURE_CLIENT_ID - Azure AD Client ID (default: 87a8f0f7-46fc-4c9f-aebf-c3ff4a2aa191)
+ *   AZURE_CLIENT_ID - Azure AD Client ID (required)
  *   USE_MANAGED_IDENTITY - Set to 'true' to use managed identity
  */
 
@@ -48,7 +48,11 @@ if (!apiUrl) {
     process.exit(1);
 }
 
-const AZURE_CLIENT_ID = process.env.AZURE_CLIENT_ID || '87a8f0f7-46fc-4c9f-aebf-c3ff4a2aa191';
+const AZURE_CLIENT_ID = process.env.AZURE_CLIENT_ID;
+if (!AZURE_CLIENT_ID) {
+    console.error('ERROR: AZURE_CLIENT_ID environment variable is required');
+    process.exit(1);
+}
 const AZURE_SCOPE = process.env.AZURE_SCOPE || `api://${AZURE_CLIENT_ID}/copilotApi`;
 
 console.log('========================================');

@@ -29,6 +29,9 @@ build/
 *.deployment
 .azure/
 
+# Generated Teams manifest (contains deployment-specific IDs)
+output/teams-manifest/
+
 # Scratch/temp files
 scratch.txt
 *.tmp

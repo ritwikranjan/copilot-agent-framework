@@ -39,6 +39,12 @@ param agentName = 'teams-copilot-agent'
 // Enable serverless Cosmos DB (recommended for dev/test)
 param cosmosServerless = true
 
+// Azure Tenant ID - MUST be provided at deployment time
+param azureTenantId = ''
+
+// Object ID for Cosmos DB reader role (leave empty to skip)
+param cosmosReaderObjectId = ''
+
 // Scaling settings for CLI server
 param cliMinReplicas = 1
 param cliMaxReplicas = 3
