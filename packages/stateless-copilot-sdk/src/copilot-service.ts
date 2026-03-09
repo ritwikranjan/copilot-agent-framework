@@ -300,27 +300,27 @@ export class CopilotService {
         let session: SessionInfo | undefined;
         const auditManager = this.auditEnabled ? this.auditManager : null;
 
-        // Session resolution
-        if (this.auditEnabled) {
-            try {
-                const result = await this.sessionManager.resolveSession(userInfo, {
-                    sessionId: options?.sessionId,
-                    sessionName: options?.sessionName,
-                    agentConfig: { model: this.config.model, agent: this.config.agentName }
-                });
-                session = result.session;
-            } catch (error) {
-                if (error instanceof SessionNotFoundError) {
-                    return {
-                        success: false,
-                        error: error.message,
-                        model: this.config.model,
-                        agent: this.config.agentName
-                    };
-                }
-                this.log.error('Session resolution error: %O', error);
-                // Continue without session if audit fails
+        // Session resolution (always resolve, regardless of audit)
+        try {
+            const result = await this.sessionManager.resolveSession(userInfo, {
+                sessionId: options?.sessionId,
+                sessionName: options?.sessionName,
+                conversationId: options?.conversationId,
+                agentConfig: { model: this.config.model, agent: this.config.agentName }
+            });
+            session = result.session;
+        } catch (error) {
+            if (error instanceof SessionNotFoundError || error instanceof SessionExpiredError) {
+                return {
+                    success: false,
+                    error: error.message,
+                    model: this.config.model,
+                    agent: this.config.agentName,
+                    sessionExpired: error instanceof SessionExpiredError
+                };
             }
+            this.log.error('Session resolution error: %O', error);
+            // Continue without session if resolution fails
         }
 
         let copilotClient: CopilotClient | undefined;
