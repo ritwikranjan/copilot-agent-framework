@@ -7,7 +7,9 @@
 
 # Force production credential chain
 export AZURE_TOKEN_CREDENTIALS="${AZURE_TOKEN_CREDENTIALS:-prod}"
-# AZURE_TENANT_ID must be set via container environment variables
-export AZURE_TENANT_ID="${AZURE_TENANT_ID:?AZURE_TENANT_ID environment variable is required}"
+# AZURE_TENANT_ID: prefer env var, fall back to cached value from entrypoint
+if [ -z "$AZURE_TENANT_ID" ]; then
+    echo "AZURE_TENANT_ID not in env, check cached identity" >&2
+fi
 
 exec /usr/local/bin/azmcp-real "$@"

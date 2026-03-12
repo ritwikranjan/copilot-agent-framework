@@ -14,6 +14,7 @@ export default defineConfig({
     '@azure/cosmos',
     '@azure/identity',
     '@github/copilot-sdk',
+    'debug',
     '@microsoft/teams.api',
     '@microsoft/teams.apps',
     '@microsoft/teams.botbuilder',

@@ -7,6 +7,7 @@
 cat > /tmp/.azure_identity << EOF
 export IDENTITY_ENDPOINT="$IDENTITY_ENDPOINT"
 export IDENTITY_HEADER="$IDENTITY_HEADER"
+export AZURE_TENANT_ID="$AZURE_TENANT_ID"
 EOF
 
 # Start Copilot CLI

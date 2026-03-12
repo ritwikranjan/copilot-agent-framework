@@ -65,8 +65,8 @@ RUN if [ -n "$AGENT_PROFILE" ] && [ -f "./agents/$AGENT_PROFILE/system-prompt.md
         echo "Using default tools config"; \
     fi
 
-# Production stage
-FROM node:24-alpine
+# Production stage — use Node 22 for ESM compatibility with @github/copilot-sdk
+FROM node:22-alpine
 
 WORKDIR /app
 
@@ -79,6 +79,11 @@ RUN apk add --no-cache jq && \
 
 # Install production dependencies only (no workspace dep needed — tsup bundled it)
 RUN npm install --omit=dev
+
+# Fix @github/copilot-sdk ESM import: session.js uses "vscode-jsonrpc/node"
+# without .js extension, which fails strict ESM resolution on Node 24+
+RUN find node_modules/@github/copilot-sdk -name '*.js' -exec \
+    sed -i 's|from "vscode-jsonrpc/node"|from "vscode-jsonrpc/node.js"|g' {} +
 
 # Copy built service from builder (tsup bundles the library into the service dist)
 COPY --from=builder /app/services/teams-copilot-agent/dist ./dist

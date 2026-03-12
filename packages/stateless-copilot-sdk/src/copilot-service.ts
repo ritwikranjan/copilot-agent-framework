@@ -42,8 +42,8 @@ export interface CopilotServiceConfig {
     agentName: string;
     /** System prompt content (if not provided, a default is used) */
     systemPrompt?: string;
-    /** MCP server configurations */
-    mcpServers?: MCPServerConfig[];
+    /** MCP server configurations (keyed by server name) */
+    mcpServers?: Record<string, MCPServerConfig>;
     /** Whether audit logging is enabled */
     enableAudit?: boolean;
     /** Optional custom logger (defaults to debug-based logger) */
@@ -157,12 +157,12 @@ export function loadToolsConfig(options?: { configPath?: string; fallbackPaths?:
 export function buildMcpServersConfig(
     toolsConfig: ToolsConfig | null,
     extraEnv?: Record<string, string>
-): MCPServerConfig[] | undefined {
+): Record<string, MCPServerConfig> | undefined {
     if (!toolsConfig || !toolsConfig.mcp_servers) {
         return undefined;
     }
 
-    const mcpServers: MCPServerConfig[] = [];
+    const mcpServers: Record<string, MCPServerConfig> = {};
 
     // Merge extra env vars (e.g., managed identity from Container Apps runtime)
     const envOverrides: Record<string, string> = { ...(extraEnv || {}) };
@@ -172,20 +172,28 @@ export function buildMcpServersConfig(
     if (process.env.IDENTITY_HEADER) {
         envOverrides.IDENTITY_HEADER = process.env.IDENTITY_HEADER;
     }
+    if (process.env.AZURE_TENANT_ID) {
+        envOverrides.AZURE_TENANT_ID = process.env.AZURE_TENANT_ID;
+    }
+    if (process.env.AZURE_SUBSCRIPTION_ID) {
+        envOverrides.AZURE_SUBSCRIPTION_ID = process.env.AZURE_SUBSCRIPTION_ID;
+    }
+    if (process.env.AZURE_TOKEN_CREDENTIALS) {
+        envOverrides.AZURE_TOKEN_CREDENTIALS = process.env.AZURE_TOKEN_CREDENTIALS;
+    }
 
     for (const [serverName, serverConfig] of Object.entries(toolsConfig.mcp_servers)) {
         const mergedEnv = { ...envOverrides, ...(serverConfig.env || {}) };
 
-        mcpServers.push({
-            name: serverName,
+        mcpServers[serverName] = {
             command: serverConfig.command,
             args: serverConfig.args || [],
             env: mergedEnv,
             tools: serverConfig.tools || ['*']
-        });
+        };
     }
 
-    return mcpServers.length > 0 ? mcpServers : undefined;
+    return Object.keys(mcpServers).length > 0 ? mcpServers : undefined;
 }
 
 // ============ CopilotService Class ============
@@ -221,7 +229,7 @@ export class CopilotService {
             this.config.cliUrl,
             this.config.model,
             this.config.agentName,
-            this.config.mcpServers ? this.config.mcpServers.map(s => s.name).join(', ') : 'None',
+            this.config.mcpServers ? Object.keys(this.config.mcpServers).join(', ') : 'None',
             this.config.enableAudit ?? true
         );
     }
@@ -341,6 +349,10 @@ export class CopilotService {
                 systemMessage: {
                     mode: 'replace',
                     content: this.config.systemPrompt
+                },
+                onPermissionRequest: async (request: { kind: string; toolCallId?: string; [key: string]: unknown }) => {
+                    this.log.debug('Permission request (non-streaming): %O', request);
+                    return { kind: 'approved' as const };
                 }
             };
 
@@ -351,7 +363,7 @@ export class CopilotService {
 
             this.log.debug('Session config: %O', { ...sessionConfig, systemMessage: { mode: 'replace', content: '(truncated)' } });
 
-            const copilotSession = await copilotClient.createSession(sessionConfig);
+            const copilotSession = await copilotClient.createSession(sessionConfig as any);
             const response = await copilotSession.sendAndWait({ prompt: message });
 
             this.log.debug('Response: %O', response);
@@ -520,7 +532,7 @@ export class CopilotService {
             if (!isNewCopilotSession && session!.copilot_session_id) {
                 try {
                     this.log.info('Attempting to resume Copilot session: %s', session!.copilot_session_id);
-                    copilotSession = await copilotClient.resumeSession(session!.copilot_session_id, sessionConfig);
+                    copilotSession = await copilotClient.resumeSession(session!.copilot_session_id, sessionConfig as any);
                     this.log.info('Successfully resumed Copilot session: %s', session!.copilot_session_id);
                 } catch (resumeError) {
                     this.log.warn('Failed to resume Copilot session, creating new: %O', resumeError);
@@ -531,7 +543,7 @@ export class CopilotService {
             // Create new session if needed
             if (!copilotSession) {
                 this.log.info('Creating new Copilot session for conversation %s', conversationId);
-                copilotSession = await copilotClient.createSession(sessionConfig);
+                copilotSession = await copilotClient.createSession(sessionConfig as any);
 
                 if (!copilotSession) {
                     throw new Error('Failed to create Copilot session');

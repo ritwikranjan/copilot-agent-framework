@@ -14,6 +14,9 @@ RUN npm install -g @github/copilot @azure/mcp
 COPY scripts/azmcp-wrapper.sh /usr/local/bin/azmcp-wrapper
 COPY scripts/copilot-entrypoint.sh /usr/local/bin/copilot-entrypoint
 
+# Fix CRLF line endings (Windows → Unix)
+RUN sed -i 's/\r$//' /usr/local/bin/azmcp-wrapper /usr/local/bin/copilot-entrypoint
+
 # Replace azmcp with wrapper (injects managed identity env vars from cache)
 RUN mv $(which azmcp) /usr/local/bin/azmcp-real \
     && mv /usr/local/bin/azmcp-wrapper /usr/local/bin/azmcp \

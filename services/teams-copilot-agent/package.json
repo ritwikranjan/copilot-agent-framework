@@ -17,7 +17,7 @@
     "@azure/cosmos": "^4.2.0",
     "@azure/identity": "^4.5.0",
     "@ritwikranjan/copilot-agent-framework": "*",
-    "@github/copilot-sdk": "^0.1.20",
+    "@github/copilot-sdk": "^0.1.32",
     "@microsoft/teams.api": "latest",
     "@microsoft/teams.apps": "latest",
     "@microsoft/teams.botbuilder": "^2.0.5",

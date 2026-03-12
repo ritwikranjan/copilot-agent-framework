@@ -122,7 +122,6 @@ export interface ToolsConfig {
 }
 
 export interface MCPServerConfig {
-    name: string;
     command: string;
     args?: string[];
     env?: Record<string, string>;
