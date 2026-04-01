@@ -127,13 +127,16 @@ class CosmosClientBase {
  * for efficient user-centric queries.
  */
 export class SessionCosmosStore extends CosmosClientBase implements ISessionStore {
+    private _initialized = false;
     /**
      * Initialize the Sessions container.
      */
     async initialize(): Promise<void> {
+        if (this._initialized) return;
         console.log('Initializing SessionCosmosStore...');
         await this.ensureContainer(SESSIONS_CONTAINER, '/user_info/username');
         console.log('SessionCosmosStore initialization complete.');
+        this._initialized = true;
     }
 
     /**
@@ -244,14 +247,17 @@ export class SessionCosmosStore extends CosmosClientBase implements ISessionStor
  * both partitioned by `/session_id` for session-centric queries.
  */
 export class AuditCosmosStore extends CosmosClientBase implements IAuditStore {
+    private _initialized = false;
     /**
      * Initialize the Interactions and ToolExecutions containers.
      */
     async initialize(): Promise<void> {
+        if (this._initialized) return;
         console.log('Initializing AuditCosmosStore...');
         await this.ensureContainer(INTERACTIONS_CONTAINER, '/session_id');
         await this.ensureContainer(TOOL_EXECUTIONS_CONTAINER, '/session_id');
         console.log('AuditCosmosStore initialization complete.');
+        this._initialized = true;
     }
 
     // ============ Interactions Operations ============

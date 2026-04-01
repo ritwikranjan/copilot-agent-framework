@@ -132,10 +132,16 @@ export interface MCPServerConfig {
 
 /** Generic stream handler interface - framework agnostic replacement for Teams IStreamer */
 export interface IStreamHandler {
-    /** Emit content to the stream */
+    /** Emit content to the current streaming message (used for status only) */
     emit(content: string): void;
-    /** Update status/progress (optional) */
+    /** Update status/progress (optional, transient) */
     update?(status: string): void;
+    /** Send a complete separate message */
+    sendMessage?(content: string): Promise<void>;
+    /** Send typing indicator */
+    typing?(): void;
+    /** Close the stream */
+    close?(): void;
 }
 
 // ============ Constants ============

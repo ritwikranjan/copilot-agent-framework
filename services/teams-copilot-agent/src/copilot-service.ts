@@ -35,10 +35,45 @@ const ENABLE_AUDIT = process.env.ENABLE_AUDIT !== 'false';
 
 // ============ IStreamer -> IStreamHandler Adapter ============
 
-function teamsStreamerToHandler(stream: IStreamer): IStreamHandler {
+function teamsStreamerToHandler(stream: IStreamer, send: (content: string | { type: string }) => Promise<unknown>): IStreamHandler {
+    // Retry send with backoff for Bot Framework 429 rate limits
+    const sendWithRetry = async (content: string, maxRetries = 3): Promise<void> => {
+        for (let attempt = 0; attempt <= maxRetries; attempt++) {
+            try {
+                await send(content);
+                console.log(`[sendMessage] Sent successfully (${content.length} chars, attempt ${attempt + 1})`);
+                return;
+            } catch (err: any) {
+                const status = err?.response?.status || err?.status;
+                const retryAfter = err?.response?.headers?.['retry-after'];
+                if (status === 429 && attempt < maxRetries) {
+                    const waitMs = (retryAfter ? parseInt(retryAfter, 10) : 2) * 1000 + (attempt * 1000);
+                    console.log(`[sendMessage] Rate limited (429), retrying in ${waitMs}ms (attempt ${attempt + 1}/${maxRetries})`);
+                    await new Promise(r => setTimeout(r, waitMs));
+                } else {
+                    console.error(`[sendMessage] Failed after ${attempt + 1} attempts:`, err?.message || err);
+                    throw err;
+                }
+            }
+        }
+    };
+
+    // Throttle typing indicators to avoid contributing to 429 rate limits
+    let lastTypingTime = 0;
+    const TYPING_THROTTLE_MS = 5000; // max one typing indicator every 5s
+
     return {
         emit: (content: string) => stream.emit(content),
-        update: (status: string) => stream.update(status)
+        update: (status: string) => stream.update(status),
+        sendMessage: async (content: string) => { await sendWithRetry(content); },
+        typing: () => {
+            const now = Date.now();
+            if (now - lastTypingTime >= TYPING_THROTTLE_MS) {
+                lastTypingTime = now;
+                send({ type: 'typing' }).catch(() => {});
+            }
+        },
+        close: () => { stream.emit(''); }
     };
 }
 
@@ -144,6 +179,7 @@ export async function sendMessageStreaming(
     message: string,
     userInfo: UserInfo,
     stream: IStreamer,
+    send: (content: string | { type: string }) => Promise<unknown>,
     options?: {
         conversationId: string;
         sessionId?: string;
@@ -154,7 +190,7 @@ export async function sendMessageStreaming(
     return getService().sendMessageStreaming(
         message,
         userInfo,
-        teamsStreamerToHandler(stream),
+        teamsStreamerToHandler(stream, send),
         options
     );
 }

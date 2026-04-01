@@ -453,8 +453,9 @@ export class CopilotService {
         const pendingTools: Map<string, { auditToolId: string; toolName: string }> = new Map();
         let responseContent = '';  // Full accumulated content for audit
         let reasoningContent = '';
-        // Track if we've emitted any content in the current turn (for newline separation)
         let hasContentInCurrentTurn = false;
+        let turnCount = 0;           // Track which turn we're on (0 = first, streamed; 1+ = separate messages)
+        let turnContentBuffer = '';   // Buffer for subsequent turns' content
 
         // Check if session is expired
         const sessionStatus = await this.sessionManager.getSessionStatus(userInfo.username, conversationId);
@@ -473,7 +474,6 @@ export class CopilotService {
         }
 
         // Resolve session (will create new or return existing)
-        let isNewCopilotSession = false;
         try {
             const result = await this.sessionManager.resolveSession(userInfo, {
                 sessionId: options?.sessionId,
@@ -482,7 +482,6 @@ export class CopilotService {
                 agentConfig: { model: this.config.model, agent: this.config.agentName }
             });
             session = result.session;
-            isNewCopilotSession = result.isNew || !session.copilot_session_id;
 
             this.log.info('Resolved session: %s, isNew: %s, hasCopilotSessionId: %s', session.id, result.isNew, !!session.copilot_session_id);
         } catch (error) {
@@ -529,18 +528,17 @@ export class CopilotService {
             }
 
             // Try to resume existing Copilot session, or create new
-            if (!isNewCopilotSession && session!.copilot_session_id) {
+            if (session?.copilot_session_id) {
                 try {
-                    this.log.info('Attempting to resume Copilot session: %s', session!.copilot_session_id);
-                    copilotSession = await copilotClient.resumeSession(session!.copilot_session_id, sessionConfig as any);
-                    this.log.info('Successfully resumed Copilot session: %s', session!.copilot_session_id);
+                    this.log.info('Attempting to resume Copilot session: %s', session.copilot_session_id);
+                    copilotSession = await copilotClient.resumeSession(session.copilot_session_id, sessionConfig as any);
+                    this.log.info('Successfully resumed Copilot session: %s', session.copilot_session_id);
                 } catch (resumeError) {
                     this.log.warn('Failed to resume Copilot session, creating new: %O', resumeError);
-                    isNewCopilotSession = true;
                 }
             }
 
-            // Create new session if needed
+            // Create new session if resume failed or no existing session
             if (!copilotSession) {
                 this.log.info('Creating new Copilot session for conversation %s', conversationId);
                 copilotSession = await copilotClient.createSession(sessionConfig as any);
@@ -574,7 +572,16 @@ export class CopilotService {
 
             // Set up event handlers for streaming
             const STREAM_TIMEOUT = 600000; // 10 minutes
+            const FIRST_RESPONSE_TIMEOUT = 120000; // 120s to get first event from model
             let timeoutId: ReturnType<typeof setTimeout> | undefined;
+            let firstResponseTimeoutId: ReturnType<typeof setTimeout> | undefined;
+            let receivedFirstEvent = false;
+            const pendingMessages: Promise<void>[] = []; // Track sendMessage promises
+
+            // Reasoning buffer: accumulate deltas and show last full sentence
+            let reasoningBuffer = '';
+            let lastReasoningUpdate = 0;
+            const REASONING_UPDATE_INTERVAL = 1500; // ms between status updates
 
             await new Promise<void>((resolve, reject) => {
                 timeoutId = setTimeout(() => {
@@ -582,34 +589,61 @@ export class CopilotService {
                     reject(new Error('Streaming timed out'));
                 }, STREAM_TIMEOUT);
 
+                // First response timeout — if model doesn't start within 60s, fail fast
+                firstResponseTimeoutId = setTimeout(() => {
+                    if (!receivedFirstEvent) {
+                        this.log.error('No response from model within %d ms — session may be too large', FIRST_RESPONSE_TIMEOUT);
+                        if (timeoutId) clearTimeout(timeoutId);
+                        reject(new Error('Session context too large or model unresponsive. Try /new to start a fresh session.'));
+                    }
+                }, FIRST_RESPONSE_TIMEOUT);
+
                 unsubscribe = copilotSession!.on((event: { type: string; data?: Record<string, unknown> }) => {
                     try {
+                        // Clear first-response timeout on any model activity event
+                        if (!receivedFirstEvent) {
+                            const activeEvents = ['assistant.turn_start', 'assistant.reasoning_delta', 'assistant.message_delta', 'assistant.streaming_delta', 'assistant.reasoning', 'tool.execution_start', 'session.tools_updated'];
+                            if (activeEvents.includes(event.type)) {
+                                receivedFirstEvent = true;
+                                if (firstResponseTimeoutId) { clearTimeout(firstResponseTimeoutId); firstResponseTimeoutId = undefined; }
+                            }
+                        }
+
                         this.log.debug('Event: %s, data: %O', event.type, event.data);
 
                         switch (event.type) {
                             case 'assistant.turn_start':
-                                this.log.debug('Turn start');
+                                this.log.debug('Turn start (turn %d)', turnCount);
                                 hasContentInCurrentTurn = false;
+                                turnContentBuffer = '';
+                                // Send typing indicator at start of every turn
+                                streamHandler.typing?.();
                                 break;
 
                             case 'assistant.turn_end':
-                                this.log.debug('Turn end');
-                                // Add newline separator between turns for clarity
-                                if (hasContentInCurrentTurn) {
-                                    streamHandler.emit('\n\n');
-                                    responseContent += '\n\n';
+                                this.log.info('Turn end (turn %d, hasContent: %s, bufferLen: %d)', turnCount, hasContentInCurrentTurn, turnContentBuffer.length);
+                                // Send buffered content as a separate message
+                                if (turnContentBuffer.trim() && streamHandler.sendMessage) {
+                                    this.log.info('Sending turn %d message (%d chars)', turnCount, turnContentBuffer.trim().length);
+                                    const p = streamHandler.sendMessage(turnContentBuffer.trim())
+                                        .then(() => this.log.info('Turn %d message sent successfully', turnCount))
+                                        .catch(err => this.log.error('Failed to send turn %d message: %O', turnCount, err));
+                                    pendingMessages.push(p);
+                                } else {
+                                    this.log.info('Turn %d: no content to send (buffer empty or no sendMessage handler)', turnCount);
                                 }
+                                turnCount++;
                                 break;
 
-                            case 'assistant.message_delta': {
-                                // Streaming delta - extract deltaContent from the event data
-                                const deltaContent = event.data?.deltaContent as string | undefined;
+                            case 'assistant.message_delta':
+                            case 'assistant.streaming_delta': {
+                                // Buffer all content — sent as separate message on turn_end
+                                const deltaContent = (event.data?.deltaContent || event.data?.content) as string | undefined;
                                 if (deltaContent) {
                                     this.log.debug('Delta: %s', deltaContent);
                                     responseContent += deltaContent;
+                                    turnContentBuffer += deltaContent;
                                     hasContentInCurrentTurn = true;
-                                    // Stream directly for responsive UX
-                                    streamHandler.emit(deltaContent);
                                 } else {
                                     this.log.debug('No deltaContent in event data');
                                 }
@@ -617,24 +651,41 @@ export class CopilotService {
                             }
 
                             case 'assistant.message': {
-                                // Final complete message for this turn
-                                // Content was already streamed via deltas, this is just for logging
+                                // Complete message for this turn — this is the primary content source
+                                // (streaming_delta only carries progress metadata, not actual text)
                                 const content = event.data?.content as string | undefined;
                                 if (content) {
-                                    this.log.debug('Final message: %s...', content.substring(0, 100));
+                                    this.log.info('Final message (%d chars): %s...', content.length, content.substring(0, 100));
+                                    // Use this as turn content if deltas didn't provide it
+                                    if (!turnContentBuffer.trim()) {
+                                        turnContentBuffer = content;
+                                        responseContent += content;
+                                        hasContentInCurrentTurn = true;
+                                    }
                                 }
                                 break;
                             }
 
                             case 'assistant.reasoning_delta': {
-                                // Reasoning delta
+                                // Reasoning delta - buffer and show throttled status updates
                                 const reasoningDelta = event.data?.deltaContent as string | undefined;
                                 if (reasoningDelta) {
                                     this.log.debug('Reasoning delta: %s', reasoningDelta);
                                     reasoningContent += reasoningDelta;
-                                    // Optionally show reasoning as status updates
-                                    if (options?.showReasoning) {
-                                        streamHandler.update?.(`Thinking: ${reasoningDelta}`);
+                                    reasoningBuffer += reasoningDelta;
+
+                                    const now = Date.now();
+                                    if (now - lastReasoningUpdate >= REASONING_UPDATE_INTERVAL) {
+                                        // Extract last sentence or meaningful chunk
+                                        const sentences = reasoningBuffer.split(/[.!?\n]/).filter(s => s.trim().length > 10);
+                                        const display = sentences.length > 0
+                                            ? sentences[sentences.length - 1].trim().substring(0, 100)
+                                            : reasoningBuffer.trim().substring(reasoningBuffer.length - 100).trim();
+                                        if (display) {
+                                            streamHandler.update?.(`💭 ${display}...`);
+                                        }
+                                        lastReasoningUpdate = now;
+                                        reasoningBuffer = '';
                                     }
                                 }
                                 break;
@@ -657,10 +708,9 @@ export class CopilotService {
                                 const toolName = (event.data?.toolName || event.data?.name || 'unknown') as string;
                                 this.log.info('Tool start: %s (toolCallId: %s)', toolName, toolCallId);
 
-                                // Emit tool usage as content so user can see it
-                                const toolMessage = `\n\n🔧 *Using tool: ${toolName}*\n\n`;
-                                streamHandler.emit(toolMessage);
-                                responseContent += toolMessage;
+                                // Show typing indicator during tool execution
+                                streamHandler.typing?.();
+                                streamHandler.update?.(`🔧 Using tool: ${toolName}`);
 
                                 // Log tool start to audit using toolCallId as key
                                 if (auditManager && toolCallId) {
@@ -672,13 +722,11 @@ export class CopilotService {
                             }
 
                             case 'tool.execution_progress': {
-                                // Tool execution progress - show to user
+                                // Tool execution progress - show as status update
                                 const progressMessage = event.data?.progressMessage as string | undefined;
                                 if (progressMessage) {
                                     this.log.debug('Tool progress: %s', progressMessage);
-                                    const formattedProgress = `📋 *${progressMessage}*\n`;
-                                    streamHandler.emit(formattedProgress);
-                                    responseContent += formattedProgress;
+                                    streamHandler.update?.(`📋 ${progressMessage}`);
                                 }
                                 break;
                             }
@@ -700,15 +748,28 @@ export class CopilotService {
                             }
 
                             case 'session.idle':
-                                this.log.debug('Session idle — streaming complete');
-                                if (timeoutId) clearTimeout(timeoutId);
-                                resolve();
+                                this.log.debug('Session idle — waiting for %d pending messages', pendingMessages.length);
+                                // Wait for all pending sendMessage calls to complete before closing
+                                Promise.all(pendingMessages).then(() => {
+                                    this.log.debug('All pending messages sent — closing stream');
+                                    streamHandler.close?.();
+                                    if (timeoutId) clearTimeout(timeoutId);
+                                    if (firstResponseTimeoutId) clearTimeout(firstResponseTimeoutId);
+                                    resolve();
+                                }).catch(err => {
+                                    this.log.error('Error sending pending messages: %O', err);
+                                    streamHandler.close?.();
+                                    if (timeoutId) clearTimeout(timeoutId);
+                                    if (firstResponseTimeoutId) clearTimeout(firstResponseTimeoutId);
+                                    resolve(); // still resolve, messages were best-effort
+                                });
                                 break;
 
                             case 'session.error': {
                                 const errorMessage = (event.data?.message || event.data?.error || 'Unknown session error') as string;
                                 this.log.error('Session error: %s', errorMessage);
                                 if (timeoutId) clearTimeout(timeoutId);
+                                if (firstResponseTimeoutId) clearTimeout(firstResponseTimeoutId);
                                 reject(new Error(errorMessage));
                                 break;
                             }

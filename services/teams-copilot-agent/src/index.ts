@@ -211,11 +211,12 @@ app.on('message', async ({ send, activity, stream }) => {
     
     try {
         // Send message to Copilot via direct SDK integration
-        // Pass the Teams stream directly - it implements IStreamer interface
+        // Pass stream for first turn, send for subsequent turns as separate messages
         const response: CopilotResponse = await sendMessageStreaming(
             userMessage,
             userInfo,
             stream,
+            send,
             { conversationId }
         );
         
