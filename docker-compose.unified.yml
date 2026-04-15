@@ -1,11 +1,12 @@
-# Docker Compose for Unified Teams Copilot Agent
-# Local development and testing configuration
+# Docker Compose for Unified Copilot Agent Framework
+# 4-service architecture: CLI Server → API Service → Teams Bot / Web App
 #
 # Usage:
 #   1. Create a .env file with COPILOT_GITHUB_TOKEN
 #   2. Optionally set AGENT_PROFILE to an agent directory name (e.g., code-reviewer)
 #   3. Run: docker-compose -f docker-compose.unified.yml up --build
-#   4. Open DevTools: http://localhost:3979/devtools
+#   4. Open Web App: http://localhost:3001
+#   5. Open DevTools: http://localhost:3979/devtools
 
 version: '3.8'
 
@@ -29,7 +30,37 @@ services:
     networks:
       - copilot-network
 
-  # Teams Copilot Agent - the unified bot service
+  # Internal API Service - owns all copilot interaction, session, audit
+  api-service:
+    build:
+      context: .
+      dockerfile: services/api/Dockerfile
+    environment:
+      - CLI_URL=copilot-cli-server:3000
+      - PORT=4000
+      - MODEL=${MODEL:-gpt-5.2}
+      - AGENT_NAME=${AGENT_NAME:-copilot-api}
+      - ENABLE_AUDIT=false
+      - NODE_ENV=development
+      - APPLICATIONINSIGHTS_CONNECTION_STRING=${APPLICATIONINSIGHTS_CONNECTION_STRING:-}
+    ports:
+      - "4000:4000"
+    depends_on:
+      copilot-cli-server:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "wget", "--no-verbose", "--tries=1", "--spider", "http://localhost:4000/api/health"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 10s
+    volumes:
+      - ${AGENT_PROFILE:+./agents/${AGENT_PROFILE}/system-prompt.md}${AGENT_PROFILE:-./services/teams-copilot-agent/system-prompt.md}:/app/system-prompt.md:ro
+      - ${AGENT_PROFILE:+./agents/${AGENT_PROFILE}/tools-config.json}${AGENT_PROFILE:-./services/teams-copilot-agent/tools-config.json}:/app/tools-config.json:ro
+    networks:
+      - copilot-network
+
+  # Teams Copilot Agent - thin frontend for Teams Bot Framework
   teams-copilot-agent:
     build:
       context: .
@@ -37,18 +68,16 @@ services:
       args:
         AGENT_PROFILE: ${AGENT_PROFILE:-}
     environment:
-      - CLI_URL=copilot-cli-server:3000
+      - API_URL=http://api-service:4000
       - PORT=3978
-      - MODEL=${MODEL:-gpt-5.2}
-      - AGENT_NAME=${AGENT_NAME:-teams-copilot-agent}
-      - ENABLE_AUDIT=false
       - NODE_ENV=development
       - LOG_LEVEL=debug
+      - APPLICATIONINSIGHTS_CONNECTION_STRING=${APPLICATIONINSIGHTS_CONNECTION_STRING:-}
     ports:
       - "3978:3978"
       - "3979:3979"
     depends_on:
-      copilot-cli-server:
+      api-service:
         condition: service_healthy
     healthcheck:
       test: ["CMD", "wget", "--no-verbose", "--tries=1", "--spider", "http://localhost:3978/"]
@@ -168,6 +197,29 @@ services:
       - "3979:3979"
     depends_on:
       teams-copilot-agent:
+        condition: service_healthy
+    networks:
+      - copilot-network
+
+  # Web App - Next.js frontend with MSAL auth
+  web-app:
+    build:
+      context: ./services/web-app
+      dockerfile: Dockerfile
+    environment:
+      - API_URL=http://api-service:4000
+      - PORT=3001
+      - NODE_ENV=development
+      - NEXT_PUBLIC_ENTRA_CLIENT_ID=${ENTRA_CLIENT_ID:-}
+      - NEXT_PUBLIC_ENTRA_TENANT_ID=${ENTRA_TENANT_ID:-}
+      - NEXT_PUBLIC_REDIRECT_URI=http://localhost:3001
+      - ENTRA_CLIENT_ID=${ENTRA_CLIENT_ID:-}
+      - ENTRA_TENANT_ID=${ENTRA_TENANT_ID:-}
+      - APPLICATIONINSIGHTS_CONNECTION_STRING=${APPLICATIONINSIGHTS_CONNECTION_STRING:-}
+    ports:
+      - "3001:3001"
+    depends_on:
+      api-service:
         condition: service_healthy
     networks:
       - copilot-network
