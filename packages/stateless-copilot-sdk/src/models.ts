@@ -22,6 +22,11 @@ export enum ToolExecutionStatus {
     ERROR = 'error'
 }
 
+export enum ShareRole {
+    VIEWER = 'viewer',
+    COLLABORATOR = 'collaborator'
+}
+
 // ============ Interfaces ============
 
 export interface UserInfo {
@@ -54,6 +59,10 @@ export interface SessionInfo {
     expires_at?: string;
     /** Last activity timestamp (ISO 8601) */
     last_activity_at?: string;
+    /** Unique shareable identifier (short, URL-safe) */
+    share_id?: string;
+    /** Whether this session has been shared */
+    is_shared?: boolean;
 }
 
 export interface Interaction {
@@ -106,6 +115,23 @@ export interface CopilotResponse {
     reasoning?: string;
     sessionExpired?: boolean;
     remainingSessionTime?: string;
+}
+
+export interface SessionShare {
+    /** Unique share ID (Cosmos DB document ID) */
+    id: string;
+    /** The session being shared */
+    session_id: string;
+    /** Owner of the session */
+    session_owner: string;
+    /** Username the session is shared with */
+    shared_with_username: string;
+    /** Share role */
+    role: ShareRole;
+    /** When the share was created (ISO 8601) */
+    created_at: string;
+    /** Short URL-safe share identifier for link sharing */
+    share_id: string;
 }
 
 // ============ MCP Configuration Types ============
@@ -289,6 +315,33 @@ export function createToolExecution(
 }
 
 // ============ Helper Functions ============
+
+/**
+ * Generate a short, URL-safe share ID (8 chars).
+ */
+function generateShareId(): string {
+    return uuidv4().replace(/-/g, '').substring(0, 8);
+}
+
+/**
+ * Create a new session share record.
+ */
+export function createSessionShare(
+    sessionId: string,
+    sessionOwner: string,
+    sharedWithUsername: string,
+    role: ShareRole = ShareRole.COLLABORATOR
+): SessionShare {
+    return {
+        id: uuidv4(),
+        session_id: sessionId,
+        session_owner: sessionOwner,
+        shared_with_username: sharedWithUsername,
+        role,
+        created_at: new Date().toISOString(),
+        share_id: generateShareId(),
+    };
+}
 
 /**
  * Get the partition key for a session (username)

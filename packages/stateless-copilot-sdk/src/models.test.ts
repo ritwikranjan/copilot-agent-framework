@@ -6,9 +6,11 @@ import { describe, it, expect, beforeEach, vi } from 'vitest';
 import {
     SessionStatus,
     ToolExecutionStatus,
+    ShareRole,
     createSessionInfo,
     createInteraction,
     createToolExecution,
+    createSessionShare,
     getSessionPartitionKey,
     getInteractionPartitionKey,
     getToolExecutionPartitionKey
@@ -216,6 +218,39 @@ describe('Models', () => {
         it('should handle large values', () => {
             const ms = 11 * 60 * 60 * 1000 + 59 * 60 * 1000; // 11h 59m
             expect(formatRemainingTime(ms)).toBe('11h 59m');
+        });
+    });
+
+    describe('createSessionShare', () => {
+        it('should create a share with correct defaults', () => {
+            const share = createSessionShare('sess-1', 'owner', 'recipient');
+
+            expect(share.id).toMatch(/^[0-9a-f-]{36}$/);
+            expect(share.session_id).toBe('sess-1');
+            expect(share.session_owner).toBe('owner');
+            expect(share.shared_with_username).toBe('recipient');
+            expect(share.role).toBe(ShareRole.COLLABORATOR);
+            expect(share.share_id).toBeDefined();
+            expect(share.share_id.length).toBe(8);
+            expect(share.created_at).toBeDefined();
+        });
+
+        it('should respect explicit role parameter', () => {
+            const share = createSessionShare('sess-1', 'owner', 'recipient', ShareRole.VIEWER);
+            expect(share.role).toBe(ShareRole.VIEWER);
+        });
+
+        it('should generate unique share_ids', () => {
+            const share1 = createSessionShare('sess-1', 'owner', 'a');
+            const share2 = createSessionShare('sess-1', 'owner', 'b');
+            expect(share1.share_id).not.toBe(share2.share_id);
+        });
+    });
+
+    describe('ShareRole enum', () => {
+        it('should have correct values', () => {
+            expect(ShareRole.VIEWER).toBe('viewer');
+            expect(ShareRole.COLLABORATOR).toBe('collaborator');
         });
     });
 });

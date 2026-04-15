@@ -19,10 +19,12 @@ export type {
 export {
     SessionStatus,
     ToolExecutionStatus,
+    ShareRole,
     SESSION_EXPIRATION_MS,
     createSessionInfo,
     createInteraction,
     createToolExecution,
+    createSessionShare,
     getSessionPartitionKey,
     getInteractionPartitionKey,
     getToolExecutionPartitionKey,
@@ -42,6 +44,7 @@ export type {
     ProcessMessageOptions,
     HandleEventFn,
     AuditContext,
+    SessionShare,
 } from './models.js';
 
 // ============ Interfaces ============
