@@ -20,6 +20,8 @@ import {
     loadToolsConfig,
     buildMcpServersConfig,
 } from '@ritwikranjan/copilot-agent-framework';
+import type { ISessionStore, IAuditStore } from '@ritwikranjan/copilot-agent-framework';
+import { SessionCosmosStore, AuditCosmosStore } from './cosmos-stores.js';
 import { createChatRouter } from './routes/chat.js';
 import { createSessionsRouter } from './routes/sessions.js';
 import { createSharingRouter } from './routes/sharing.js';
@@ -32,6 +34,7 @@ const CLI_URL = process.env.CLI_URL || 'localhost:3000';
 const MODEL = process.env.MODEL || 'gpt-5.2';
 const AGENT_NAME = process.env.AGENT_NAME || 'copilot-api';
 const ENABLE_AUDIT = process.env.ENABLE_AUDIT !== 'false';
+const USE_COSMOS = !!(process.env.COSMOS_ENDPOINT || process.env.COSMOS_ACCOUNT_NAME);
 
 // ============ Service Initialization ============
 
@@ -44,10 +47,19 @@ function initializeServices(): void {
     const toolsConfig = loadToolsConfig();
     const mcpServers = buildMcpServersConfig(toolsConfig);
 
-    // Use in-memory stores for now; Cosmos stores will be added when
-    // cosmos_integration is moved to the SDK package
-    const sessionStore = new InMemorySessionStore();
-    const auditStore = new InMemoryAuditStore();
+    // Use Cosmos DB in production, in-memory stores for local development
+    let sessionStore: ISessionStore;
+    let auditStore: IAuditStore;
+
+    if (USE_COSMOS) {
+        console.log('[Init] Using Cosmos DB stores');
+        sessionStore = new SessionCosmosStore();
+        auditStore = new AuditCosmosStore();
+    } else {
+        console.log('[Init] Using in-memory stores (local development)');
+        sessionStore = new InMemorySessionStore();
+        auditStore = new InMemoryAuditStore();
+    }
 
     _sessionManager = new SessionManager({ store: sessionStore });
     _auditManager = ENABLE_AUDIT ? new AuditManager({ store: auditStore }) : null;

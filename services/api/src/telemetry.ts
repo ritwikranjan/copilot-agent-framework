@@ -40,6 +40,9 @@ export const chatFirstTokenLatency = meter.createHistogram('api.chat.first_token
 export const sessionCounter = meter.createCounter('api.session.count', {
     description: 'Session lifecycle events',
 });
+export const sessionActive = meter.createUpDownCounter('api.session.active', {
+    description: 'Number of currently active sessions',
+});
 export const shareCounter = meter.createCounter('api.share.count', {
     description: 'Share operations',
 });
@@ -67,6 +70,11 @@ export function trackChatLatency(startTime: number, success: boolean) {
 }
 export function trackSession(event: 'create' | 'resume' | 'end' | 'expire') {
     sessionCounter.add(1, { event });
+    if (event === 'create' || event === 'resume') {
+        sessionActive.add(1);
+    } else if (event === 'end' || event === 'expire') {
+        sessionActive.add(-1);
+    }
 }
 export function trackShare(action: 'create' | 'revoke' | 'access') {
     shareCounter.add(1, { action });

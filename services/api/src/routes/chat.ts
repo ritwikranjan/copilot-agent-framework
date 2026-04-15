@@ -35,6 +35,13 @@ export function createChatRouter(getService: () => CopilotService): Router {
 
         console.log(`[Chat] POST /api/chat user=${userInfo.username} convId=${conversationId || '(new)'}`);
 
+        // Track SSE connection lifecycle
+        const sseSessionId = conversationId || '(new)';
+        console.log(`[SSE] Connection opened for session=${sseSessionId} user=${userInfo.username}`);
+        res.on('close', () => {
+            const duration = Date.now() - startTime;
+            console.log(`[SSE] Connection closed for session=${sseSessionId} user=${userInfo.username} (duration=${duration}ms)`);
+        });
         try {
             initSSEResponse(res);
             const streamHandler = createSSEStreamHandler(res);
