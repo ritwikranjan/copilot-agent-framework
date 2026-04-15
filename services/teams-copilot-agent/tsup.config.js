@@ -9,11 +9,8 @@ export default defineConfig({
   target: 'node22',
   splitting: false,
   minify: false,
-  noExternal: ['@ritwikranjan/copilot-agent-framework'],
   external: [
-    '@azure/cosmos',
     '@azure/identity',
-    '@github/copilot-sdk',
     'debug',
     '@microsoft/teams.api',
     '@microsoft/teams.apps',

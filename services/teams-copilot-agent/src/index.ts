@@ -1,11 +1,10 @@
 /**
- * Teams Copilot Agent - Unified service combining Teams Bot with direct Copilot SDK integration.
+ * Teams Copilot Agent — Thin frontend that delegates to the internal API service.
  * 
  * This service:
  * - Handles Teams Bot Framework messages using @microsoft/teams.apps SDK
- * - Connects directly to Copilot CLI server via @github/copilot-sdk
- * - Includes session management and audit logging via Cosmos DB
- * - Supports MCP tools and configurable system prompts
+ * - Delegates all copilot interaction to the internal API service
+ * - Adapts SSE streaming responses to Teams IStreamer
  */
 
 // Telemetry MUST be imported first — before any other modules — so OpenTelemetry can patch them
@@ -23,10 +22,18 @@ import {
     getConversationSessionStatus,
     endConversationSession,
     resumeConversationSession,
-    getKustoQueriesForSession
+    getKustoQueriesForSession,
+    type UserInfo,
 } from './copilot-service.js';
-import { formatRemainingTime, type UserInfo } from './cosmos_integration/index.js';
 import { COMMANDS, isCommand, getHelpText } from './commands.js';
+
+/** Format remaining time as human-readable string */
+function formatRemainingTime(remainingMs: number): string {
+    const hours = Math.floor(remainingMs / (60 * 60 * 1000));
+    const minutes = Math.floor((remainingMs % (60 * 60 * 1000)) / (60 * 1000));
+    if (hours > 0) return `${hours}h ${minutes}m`;
+    return `${minutes}m`;
+}
 
 // Configuration
 const PORT = parseInt(process.env.PORT || '3978');
