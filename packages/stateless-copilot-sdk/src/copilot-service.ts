@@ -578,11 +578,6 @@ export class CopilotService {
             let receivedFirstEvent = false;
             const pendingMessages: Promise<void>[] = []; // Track sendMessage promises
 
-            // Reasoning buffer: accumulate deltas and show last full sentence
-            let reasoningBuffer = '';
-            let lastReasoningUpdate = 0;
-            const REASONING_UPDATE_INTERVAL = 1500; // ms between status updates
-
             await new Promise<void>((resolve, reject) => {
                 timeoutId = setTimeout(() => {
                     this.log.error('Streaming timed out after %d ms', STREAM_TIMEOUT);
@@ -667,26 +662,12 @@ export class CopilotService {
                             }
 
                             case 'assistant.reasoning_delta': {
-                                // Reasoning delta - buffer and show throttled status updates
+                                // Buffer reasoning for audit — no stream updates
+                                // (reasoning updates consume stream chunks and can trigger 403)
                                 const reasoningDelta = event.data?.deltaContent as string | undefined;
                                 if (reasoningDelta) {
                                     this.log.debug('Reasoning delta: %s', reasoningDelta);
                                     reasoningContent += reasoningDelta;
-                                    reasoningBuffer += reasoningDelta;
-
-                                    const now = Date.now();
-                                    if (now - lastReasoningUpdate >= REASONING_UPDATE_INTERVAL) {
-                                        // Extract last sentence or meaningful chunk
-                                        const sentences = reasoningBuffer.split(/[.!?\n]/).filter(s => s.trim().length > 10);
-                                        const display = sentences.length > 0
-                                            ? sentences[sentences.length - 1].trim().substring(0, 100)
-                                            : reasoningBuffer.trim().substring(reasoningBuffer.length - 100).trim();
-                                        if (display) {
-                                            streamHandler.update?.(`💭 ${display}...`);
-                                        }
-                                        lastReasoningUpdate = now;
-                                        reasoningBuffer = '';
-                                    }
                                 }
                                 break;
                             }

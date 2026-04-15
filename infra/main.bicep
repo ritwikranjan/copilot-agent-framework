@@ -174,6 +174,16 @@ module cosmosDb 'modules/cosmos-db.bicep' = {
   }
 }
 
+// Deploy Application Insights for telemetry (throttling, latencies, conversation trends)
+module appInsights 'modules/app-insights.bicep' = {
+  name: 'appinsights-deployment'
+  params: {
+    baseName: baseName
+    location: location
+    tags: tags
+  }
+}
+
 // Internal CLI URL for Teams Agent to connect
 // Using short service name format for Container Apps internal service discovery
 var internalCliUrl = '${cliAppName}:${cliPort}'
@@ -193,6 +203,7 @@ module agentApp 'modules/teams-copilot-agent.bicep' = {
     cliUrl: internalCliUrl
     cosmosEndpoint: cosmosDb.outputs.endpoint
     cosmosDatabase: cosmosDb.outputs.databaseName
+    appInsightsConnectionString: appInsights.outputs.connectionString
     model: model
     agentName: agentName
     targetPort: agentPort
@@ -306,6 +317,9 @@ output cliServerIdentityPrincipalId string = cliApp.outputs.systemAssignedIdenti
 
 @description('NFS Storage Account Name (for session persistence)')
 output nfsStorageAccountName string = enableSessionStorage ? nfsStorageAccountName : ''
+
+@description('Application Insights Connection String')
+output appInsightsConnectionString string = appInsights.outputs.connectionString
 
 @description('Session storage enabled')
 output sessionStorageEnabled bool = enableSessionStorage

@@ -21,6 +21,8 @@ export default defineConfig({
     '@microsoft/teams.cards',
     '@microsoft/teams.common',
     '@microsoft/teams.dev',
-    '@microsoft/teams.graph'
+    '@microsoft/teams.graph',
+    '@azure/monitor-opentelemetry',
+    '@opentelemetry/api'
   ]
 });

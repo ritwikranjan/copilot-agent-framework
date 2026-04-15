@@ -53,6 +53,9 @@ param enableUserAuth bool = true
 @description('Azure Tenant ID')
 param azureTenantId string
 
+@description('Application Insights connection string')
+param appInsightsConnectionString string = ''
+
 @description('Tags for resources')
 param tags object = {}
 
@@ -157,6 +160,10 @@ resource containerApp 'Microsoft.App/containerApps@2023-05-01' = {
             {
               name: 'NODE_ENV'
               value: 'production'
+            }
+            {
+              name: 'APPLICATIONINSIGHTS_CONNECTION_STRING'
+              value: appInsightsConnectionString
             }
           ]
         }
