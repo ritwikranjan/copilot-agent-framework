@@ -383,6 +383,47 @@ export class SessionManager {
 
         return this.endSession(username, session.id, status);
     }
+
+    /**
+     * Reactivate the most recent session for a conversation.
+     * Finds the last session regardless of status, sets it back to active,
+     * and extends the expiry by the configured session duration.
+     *
+     * @returns The reactivated session, or null if no session found.
+     */
+    async reactivateSession(
+        username: string,
+        conversationId: string
+    ): Promise<SessionInfo | null> {
+        await this.initialize();
+
+        const lastSession = await this.db.getLastSessionByConversationId(username, conversationId);
+        if (!lastSession) {
+            this.log.warn('reactivateSession: no session found for conversation %s', conversationId);
+            return null;
+        }
+
+        // Reactivate: set status back to active, extend expiry
+        lastSession.status = SessionStatus.ACTIVE;
+        lastSession.end_time = undefined;
+        lastSession.expires_at = new Date(
+            Date.now() + this.sessionExpirationMs
+        ).toISOString();
+        lastSession.last_activity_at = new Date().toISOString();
+
+        const updated = await this.db.updateSession(
+            lastSession.id,
+            getSessionPartitionKey(lastSession),
+            lastSession
+        );
+
+        this.log.info(
+            'reactivateSession: reactivated session %s, new expiry=%s',
+            updated.id,
+            updated.expires_at
+        );
+        return updated;
+    }
 }
 
 // ============ Error Classes ============

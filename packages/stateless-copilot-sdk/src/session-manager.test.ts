@@ -369,4 +369,62 @@ describe('SessionManager', () => {
             expect(result.session.id).not.toBe(created.session.id);
         });
     });
+
+    describe('reactivateSession', () => {
+        it('should reactivate the most recent session for a conversation', async () => {
+            // Create and end a session
+            const { session } = await manager.resolveSession(userInfo, { conversationId: 'conv-reac' });
+            await manager.endSession('testuser', session.id);
+
+            // Verify it's ended
+            const status = await manager.getSessionStatus('testuser', 'conv-reac');
+            expect(status.exists).toBe(false);
+
+            // Reactivate
+            const reactivated = await manager.reactivateSession('testuser', 'conv-reac');
+
+            expect(reactivated).not.toBeNull();
+            expect(reactivated!.id).toBe(session.id);
+            expect(reactivated!.status).toBe(SessionStatus.ACTIVE);
+            expect(reactivated!.end_time).toBeUndefined();
+            expect(reactivated!.expires_at).toBeDefined();
+
+            // New expiry should be in the future
+            const expiresAt = new Date(reactivated!.expires_at!).getTime();
+            expect(expiresAt).toBeGreaterThan(Date.now());
+        });
+
+        it('should return null when no session exists for conversation', async () => {
+            const result = await manager.reactivateSession('testuser', 'no-conv');
+            expect(result).toBeNull();
+        });
+
+        it('should extend expiry by session expiration duration', async () => {
+            vi.useFakeTimers();
+            const { session } = await manager.resolveSession(userInfo, { conversationId: 'conv-reac-time' });
+            await manager.endSession('testuser', session.id);
+
+            // Advance time
+            vi.advanceTimersByTime(60_000);
+
+            const reactivated = await manager.reactivateSession('testuser', 'conv-reac-time');
+
+            const expiresAt = new Date(reactivated!.expires_at!).getTime();
+            const expectedExpiry = Date.now() + SESSION_EXPIRATION_MS;
+            // Allow 1 second tolerance
+            expect(expiresAt).toBeGreaterThanOrEqual(expectedExpiry - 1000);
+            expect(expiresAt).toBeLessThanOrEqual(expectedExpiry + 1000);
+        });
+
+        it('should not preserve copilot_session_id after endSession (cleared by end)', async () => {
+            const { session } = await manager.resolveSession(userInfo, { conversationId: 'conv-reac-cplt' });
+            await manager.updateCopilotSessionId('testuser', session.id, 'cplt-123');
+            await manager.endSession('testuser', session.id);
+
+            const reactivated = await manager.reactivateSession('testuser', 'conv-reac-cplt');
+            // endSession clears copilot_session_id, so it's undefined after reactivation
+            expect(reactivated!.copilot_session_id).toBeUndefined();
+            expect(reactivated!.status).toBe(SessionStatus.ACTIVE);
+        });
+    });
 });

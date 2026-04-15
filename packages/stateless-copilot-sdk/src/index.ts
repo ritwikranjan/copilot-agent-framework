@@ -38,6 +38,10 @@ export type {
     ToolsConfig,
     MCPServerConfig,
     IStreamHandler,
+    ProcessMessageContext,
+    ProcessMessageOptions,
+    HandleEventFn,
+    AuditContext,
 } from './models.js';
 
 // ============ Interfaces ============
@@ -70,6 +74,7 @@ export type { AuditManagerOptions } from './audit-manager.js';
 // ============ Copilot Service ============
 export {
     CopilotService,
+    defaultStreamingHandler,
     loadSystemPrompt,
     loadToolsConfig,
     buildMcpServersConfig,

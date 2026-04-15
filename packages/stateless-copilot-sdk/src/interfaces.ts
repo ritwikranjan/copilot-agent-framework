@@ -33,6 +33,9 @@ export interface ISessionStore {
 
     /** Get an active session by conversation ID for a user. */
     getSessionByConversationId(username: string, conversationId: string): Promise<SessionInfo | null>;
+
+    /** Get the most recent session by conversation ID (any status, for resume). */
+    getLastSessionByConversationId(username: string, conversationId: string): Promise<SessionInfo | null>;
 }
 
 /**

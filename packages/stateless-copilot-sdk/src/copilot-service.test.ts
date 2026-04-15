@@ -6,12 +6,12 @@
  */
 
 import { describe, it, expect, beforeEach, vi, type Mock } from 'vitest';
-import { CopilotService, loadSystemPrompt, loadToolsConfig, buildMcpServersConfig } from './copilot-service.js';
+import { CopilotService, defaultStreamingHandler, loadSystemPrompt, loadToolsConfig, buildMcpServersConfig } from './copilot-service.js';
 import { SessionManager } from './session-manager.js';
 import { AuditManager } from './audit-manager.js';
 import { InMemorySessionStore } from './stores/in-memory-session-store.js';
 import { InMemoryAuditStore } from './stores/in-memory-audit-store.js';
-import type { UserInfo, IStreamHandler, CopilotServiceConfig } from './index.js';
+import type { UserInfo, IStreamHandler, CopilotServiceConfig, ProcessMessageContext, CopilotResponse } from './index.js';
 
 // ============ Mock @github/copilot-sdk ============
 
@@ -179,14 +179,17 @@ describe('CopilotService', () => {
     });
 
     describe('sendMessageStreaming', () => {
-        let emittedContent: string[];
+        let sentMessages: string[];
         let streamHandler: IStreamHandler;
 
         beforeEach(() => {
-            emittedContent = [];
+            sentMessages = [];
             streamHandler = {
-                emit: (content: string) => emittedContent.push(content),
+                emit: vi.fn(),
                 update: vi.fn(),
+                sendMessage: vi.fn(async (content: string) => { sentMessages.push(content); }),
+                typing: vi.fn(),
+                close: vi.fn(),
             };
         });
 
@@ -214,9 +217,9 @@ describe('CopilotService', () => {
             );
 
             expect(response.success).toBe(true);
-            expect(emittedContent).toContain('Hello ');
-            expect(emittedContent).toContain('World!');
             expect(response.response).toContain('Hello World!');
+            expect(sentMessages).toHaveLength(1);
+            expect(sentMessages[0]).toBe('Hello World!');
         });
 
         it('should handle session.error events', async () => {
@@ -289,10 +292,8 @@ describe('CopilotService', () => {
             );
 
             expect(response.success).toBe(true);
-            // Should have emitted tool message
-            const toolEmissions = emittedContent.filter(c => c.includes('Using tool'));
-            expect(toolEmissions.length).toBe(1);
-            expect(toolEmissions[0]).toContain('search');
+            // Should have called update with tool status
+            expect(streamHandler.update).toHaveBeenCalledWith('🔧 Using tool: search');
         });
 
         it('should handle reasoning events', async () => {
@@ -316,7 +317,6 @@ describe('CopilotService', () => {
 
             expect(response.success).toBe(true);
             expect(response.reasoning).toBe('Thinking...');
-            expect(streamHandler.update).toHaveBeenCalledWith('Thinking: Thinking...');
         });
 
         it('should detect and report expired sessions', async () => {
@@ -450,12 +450,12 @@ describe('buildMcpServersConfig', () => {
             }
         });
 
-        expect(result).toHaveLength(1);
-        expect(result![0].name).toBe('my-server');
-        expect(result![0].command).toBe('node');
-        expect(result![0].args).toEqual(['server.js']);
-        expect(result![0].env?.API_KEY).toBe('test');
-        expect(result![0].tools).toEqual(['tool1']);
+        expect(result).toBeDefined();
+        expect(result!['my-server']).toBeDefined();
+        expect(result!['my-server'].command).toBe('node');
+        expect(result!['my-server'].args).toEqual(['server.js']);
+        expect(result!['my-server'].env?.API_KEY).toBe('test');
+        expect(result!['my-server'].tools).toEqual(['tool1']);
     });
 
     it('should inject extra env vars', () => {
@@ -468,7 +468,7 @@ describe('buildMcpServersConfig', () => {
             { CUSTOM_VAR: 'value' }
         );
 
-        expect(result![0].env?.CUSTOM_VAR).toBe('value');
+        expect(result!['server'].env?.CUSTOM_VAR).toBe('value');
     });
 
     it('should default tools to ["*"] when not specified', () => {
@@ -478,6 +478,305 @@ describe('buildMcpServersConfig', () => {
             }
         });
 
-        expect(result![0].tools).toEqual(['*']);
+        expect(result!['server'].tools).toEqual(['*']);
+    });
+});
+
+// ============ processMessage Tests ============
+
+describe('CopilotService.processMessage', () => {
+    beforeEach(() => {
+        vi.clearAllMocks();
+        mockCreateSession.mockResolvedValue({
+            sessionId: 'copilot-session-pm',
+            sendAndWait: mockSendAndWait,
+            send: mockSend,
+            on: mockOn,
+        });
+        mockStop.mockResolvedValue(undefined);
+    });
+
+    it('should call handleEvent with correct context and return its response', async () => {
+        const { service } = createService();
+        const handleEvent = vi.fn(async (ctx: ProcessMessageContext): Promise<CopilotResponse> => {
+            expect(ctx.session).toBeDefined();
+            expect(ctx.session.user_info.username).toBe('test-user');
+            expect(ctx.copilotSession).toBeDefined();
+            expect(ctx.copilotSession.sessionId).toBe('copilot-session-pm');
+            expect(ctx.message).toBe('hello from processMessage');
+            expect(ctx.config.model).toBe('test-model');
+            expect(ctx.config.agentName).toBe('test-agent');
+            expect(ctx.logger).toBeDefined();
+            return { success: true, response: 'custom response', model: 'test-model', agent: 'test-agent' };
+        });
+
+        const response = await service.processMessage({
+            message: 'hello from processMessage',
+            userInfo,
+            handleEvent,
+            conversationId: 'conv-pm-1',
+        });
+
+        expect(response.success).toBe(true);
+        expect(response.response).toBe('custom response');
+        expect(handleEvent).toHaveBeenCalledTimes(1);
+        expect(mockStop).toHaveBeenCalled();
+    });
+
+    it('should return session expired error without calling handleEvent', async () => {
+        const { service, sessionManager } = createService();
+        vi.spyOn(sessionManager, 'getSessionStatus').mockResolvedValue({
+            exists: true,
+            expired: true,
+            remainingTimeMs: 0,
+            createdAt: new Date(),
+        });
+        vi.spyOn(sessionManager, 'endSessionByConversationId').mockResolvedValue(null);
+
+        const handleEvent = vi.fn();
+
+        const response = await service.processMessage({
+            message: 'hi',
+            userInfo,
+            handleEvent,
+            conversationId: 'conv-pm-expired',
+        });
+
+        expect(response.success).toBe(false);
+        expect(response.sessionExpired).toBe(true);
+        expect(handleEvent).not.toHaveBeenCalled();
+    });
+
+    it('should resume existing copilot session when copilot_session_id exists', async () => {
+        mockResumeSession.mockResolvedValue({
+            sessionId: 'copilot-session-resumed',
+            send: mockSend,
+            on: mockOn,
+        });
+
+        const { service, sessionStore } = createService();
+
+        // Pre-create a session with a copilot_session_id
+        await sessionStore.initialize();
+        await sessionStore.createSession({
+            id: 'existing-session',
+            user_info: userInfo,
+            start_time: new Date().toISOString(),
+            status: 'active' as any,
+            conversation_id: 'conv-pm-resume',
+            copilot_session_id: 'old-copilot-id',
+            expires_at: new Date(Date.now() + 3600000).toISOString(),
+            last_activity_at: new Date().toISOString(),
+        });
+
+        const handleEvent = vi.fn(async (ctx: ProcessMessageContext) => {
+            return { success: true, response: 'resumed', model: 'test-model', agent: 'test-agent' };
+        });
+
+        await service.processMessage({
+            message: 'continue',
+            userInfo,
+            handleEvent,
+            conversationId: 'conv-pm-resume',
+        });
+
+        expect(mockResumeSession).toHaveBeenCalledWith('old-copilot-id', expect.any(Object));
+    });
+
+    it('should provide audit context when audit is enabled', async () => {
+        const { service } = createService();
+
+        const handleEvent = vi.fn(async (ctx: ProcessMessageContext) => {
+            expect(ctx.audit).not.toBeNull();
+            expect(typeof ctx.audit!.startInteraction).toBe('function');
+            expect(typeof ctx.audit!.completeInteraction).toBe('function');
+            expect(typeof ctx.audit!.logToolStart).toBe('function');
+            expect(typeof ctx.audit!.logToolComplete).toBe('function');
+            expect(typeof ctx.audit!.logToolError).toBe('function');
+            return { success: true, response: 'ok', model: 'test-model', agent: 'test-agent' };
+        });
+
+        await service.processMessage({
+            message: 'test audit context',
+            userInfo,
+            handleEvent,
+            conversationId: 'conv-pm-audit',
+        });
+
+        expect(handleEvent).toHaveBeenCalledTimes(1);
+    });
+
+    it('should provide null audit context when audit is disabled', async () => {
+        const { service } = createService({ enableAudit: false }, false);
+
+        const handleEvent = vi.fn(async (ctx: ProcessMessageContext) => {
+            expect(ctx.audit).toBeNull();
+            return { success: true, response: 'ok', model: 'test-model', agent: 'test-agent' };
+        });
+
+        await service.processMessage({
+            message: 'test no audit',
+            userInfo,
+            handleEvent,
+            conversationId: 'conv-pm-noaudit',
+        });
+    });
+
+    it('should clean up copilot client even when handleEvent throws', async () => {
+        const { service } = createService();
+
+        const handleEvent = vi.fn(async () => {
+            throw new Error('handler crashed');
+        });
+
+        const response = await service.processMessage({
+            message: 'crash test',
+            userInfo,
+            handleEvent,
+            conversationId: 'conv-pm-crash',
+        });
+
+        expect(response.success).toBe(false);
+        expect(response.error).toBe('handler crashed');
+        expect(mockStop).toHaveBeenCalled();
+    });
+});
+
+// ============ defaultStreamingHandler Tests ============
+
+describe('defaultStreamingHandler', () => {
+    let streamHandler: IStreamHandler;
+    let sentMessages: string[];
+
+    beforeEach(() => {
+        vi.clearAllMocks();
+        sentMessages = [];
+        streamHandler = {
+            emit: vi.fn(),
+            update: vi.fn(),
+            sendMessage: vi.fn(async (content: string) => { sentMessages.push(content); }),
+            typing: vi.fn(),
+            close: vi.fn(),
+        };
+        mockSend.mockResolvedValue(undefined);
+    });
+
+    function buildMockContext(overrides?: Partial<ProcessMessageContext>): ProcessMessageContext {
+        return {
+            session: { id: 'sess-1', user_info: userInfo, start_time: new Date().toISOString(), status: 'active' as any },
+            copilotSession: {
+                on: mockOn,
+                send: mockSend,
+                sessionId: 'copilot-session-dsh',
+            },
+            audit: null,
+            logger: silentLogger,
+            message: 'test message',
+            userInfo,
+            config: { model: 'test-model', agentName: 'test-agent' },
+            ...overrides,
+        } as ProcessMessageContext;
+    }
+
+    it('should stream content and return success response', async () => {
+        mockOn.mockImplementation((callback: (event: { type: string; data?: Record<string, unknown> }) => void) => {
+            setTimeout(() => {
+                callback({ type: 'assistant.turn_start' });
+                callback({ type: 'assistant.message_delta', data: { deltaContent: 'Hello' } });
+                callback({ type: 'assistant.message_delta', data: { deltaContent: ' World' } });
+                callback({ type: 'assistant.turn_end' });
+                callback({ type: 'session.idle' });
+            }, 0);
+            return () => {};
+        });
+
+        const handler = defaultStreamingHandler(streamHandler);
+        const ctx = buildMockContext();
+        const response = await handler(ctx);
+
+        expect(response.success).toBe(true);
+        expect(response.response).toBe('Hello World');
+        expect(sentMessages).toHaveLength(1);
+        expect(sentMessages[0]).toBe('Hello World');
+        expect(streamHandler.close).toHaveBeenCalled();
+    });
+
+    it('should handle session.error events', async () => {
+        mockOn.mockImplementation((callback: (event: { type: string; data?: Record<string, unknown> }) => void) => {
+            setTimeout(() => {
+                callback({ type: 'session.error', data: { message: 'Fatal error' } });
+            }, 0);
+            return () => {};
+        });
+
+        const handler = defaultStreamingHandler(streamHandler);
+        const ctx = buildMockContext();
+        const response = await handler(ctx);
+
+        expect(response.success).toBe(false);
+        expect(response.error).toBe('Fatal error');
+    });
+
+    it('should handle tool events', async () => {
+        mockOn.mockImplementation((callback: (event: { type: string; data?: Record<string, unknown> }) => void) => {
+            setTimeout(() => {
+                callback({ type: 'tool.execution_start', data: { toolCallId: 'tc-1', toolName: 'web-search' } });
+                callback({ type: 'tool.execution_complete', data: { toolCallId: 'tc-1', success: true } });
+                callback({ type: 'assistant.message_delta', data: { deltaContent: 'Results' } });
+                callback({ type: 'session.idle' });
+            }, 0);
+            return () => {};
+        });
+
+        const handler = defaultStreamingHandler(streamHandler);
+        const ctx = buildMockContext();
+        const response = await handler(ctx);
+
+        expect(response.success).toBe(true);
+        expect(streamHandler.typing).toHaveBeenCalled();
+        expect(streamHandler.update).toHaveBeenCalledWith('🔧 Using tool: web-search');
+    });
+
+    it('should capture reasoning content', async () => {
+        mockOn.mockImplementation((callback: (event: { type: string; data?: Record<string, unknown> }) => void) => {
+            setTimeout(() => {
+                callback({ type: 'assistant.reasoning_delta', data: { deltaContent: 'Let me think...' } });
+                callback({ type: 'assistant.message_delta', data: { deltaContent: 'Answer' } });
+                callback({ type: 'session.idle' });
+            }, 0);
+            return () => {};
+        });
+
+        const handler = defaultStreamingHandler(streamHandler);
+        const ctx = buildMockContext();
+        const response = await handler(ctx);
+
+        expect(response.success).toBe(true);
+        expect(response.reasoning).toBe('Let me think...');
+    });
+
+    it('should call audit helpers when audit context is provided', async () => {
+        mockOn.mockImplementation((callback: (event: { type: string; data?: Record<string, unknown> }) => void) => {
+            setTimeout(() => {
+                callback({ type: 'assistant.message_delta', data: { deltaContent: 'Reply' } });
+                callback({ type: 'session.idle' });
+            }, 0);
+            return () => {};
+        });
+
+        const auditContext = {
+            startInteraction: vi.fn().mockResolvedValue('int-1'),
+            completeInteraction: vi.fn().mockResolvedValue(undefined),
+            logToolStart: vi.fn().mockResolvedValue('tool-1'),
+            logToolComplete: vi.fn().mockResolvedValue(undefined),
+            logToolError: vi.fn().mockResolvedValue(undefined),
+        };
+
+        const handler = defaultStreamingHandler(streamHandler);
+        const ctx = buildMockContext({ audit: auditContext });
+        await handler(ctx);
+
+        expect(auditContext.startInteraction).toHaveBeenCalledWith('test message');
+        expect(auditContext.completeInteraction).toHaveBeenCalledWith('Reply', undefined);
     });
 });

@@ -106,4 +106,19 @@ export class InMemorySessionStore implements ISessionStore {
         }
         return null;
     }
+
+    async getLastSessionByConversationId(username: string, conversationId: string): Promise<SessionInfo | null> {
+        let latest: SessionInfo | null = null;
+        for (const session of this.sessions.values()) {
+            if (
+                session.user_info.username === username &&
+                session.conversation_id === conversationId
+            ) {
+                if (!latest || new Date(session.start_time).getTime() > new Date(latest.start_time).getTime()) {
+                    latest = session;
+                }
+            }
+        }
+        return latest ? { ...latest } : null;
+    }
 }

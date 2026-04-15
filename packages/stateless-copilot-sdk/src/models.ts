@@ -6,6 +6,7 @@
  */
 
 import { v4 as uuidv4 } from 'uuid';
+import type { ILogger } from './logger.js';
 
 // ============ Enums ============
 
@@ -142,6 +143,84 @@ export interface IStreamHandler {
     typing?(): void;
     /** Close the stream */
     close?(): void;
+}
+
+// ============ Process Message Context ============
+
+/**
+ * Audit helpers exposed to handleEvent callbacks.
+ * Provides a simplified interface for logging interactions and tools
+ * without requiring direct access to the AuditManager.
+ */
+export interface AuditContext {
+    /** Start a new interaction (user turn). Returns interaction ID. */
+    startInteraction(userQuery: string): Promise<string>;
+    /** Complete the current interaction with the agent's response. */
+    completeInteraction(response?: string, reasoning?: string): Promise<void>;
+    /** Log the start of a tool execution. Returns audit tool ID. */
+    logToolStart(toolName: string, args?: Record<string, unknown>): Promise<string>;
+    /** Log the completion of a tool execution. */
+    logToolComplete(auditToolId: string, result?: unknown): Promise<void>;
+    /** Log a tool error. */
+    logToolError(auditToolId: string, error: string): Promise<void>;
+}
+
+/**
+ * Context passed to the user's handleEvent callback.
+ * Provides everything needed to interact with the copilot session.
+ */
+export interface ProcessMessageContext {
+    /** The resolved session info */
+    session: SessionInfo;
+    /** The copilot SDK session (subscribe to events, send messages) */
+    copilotSession: {
+        /** Subscribe to copilot events */
+        on(handler: (event: { type: string; data?: Record<string, unknown> }) => void): () => void;
+        /** Send a message to the copilot */
+        send(params: { prompt: string }): Promise<void>;
+        /** Send and wait for response (non-streaming) */
+        sendAndWait?(params: { prompt: string }): Promise<unknown>;
+        /** The copilot session ID */
+        sessionId: string;
+    };
+    /** Audit helpers (null if audit is disabled) */
+    audit: AuditContext | null;
+    /** Logger scoped to this request */
+    logger: ILogger;
+    /** The user's message */
+    message: string;
+    /** User info for this request */
+    userInfo: UserInfo;
+    /** Service configuration */
+    config: {
+        model: string;
+        agentName: string;
+    };
+}
+
+/**
+ * Function signature for the user's event handler.
+ * The framework calls this after setting up the session and copilot client.
+ * The handler is responsible for subscribing to events and processing the response.
+ */
+export type HandleEventFn = (ctx: ProcessMessageContext) => Promise<CopilotResponse>;
+
+/**
+ * Options for processMessage().
+ */
+export interface ProcessMessageOptions {
+    /** The user message to send */
+    message: string;
+    /** User information */
+    userInfo: UserInfo;
+    /** The event handler that processes copilot events */
+    handleEvent: HandleEventFn;
+    /** Conversation ID for session persistence */
+    conversationId?: string;
+    /** Explicit session ID to resume */
+    sessionId?: string;
+    /** Session name */
+    sessionName?: string;
 }
 
 // ============ Constants ============
