@@ -7,12 +7,12 @@
 
 import { Router, type Request, type Response } from 'express';
 import type { SessionManager } from '@ritwikranjan/copilot-agent-framework';
-import type { AuditManager } from '@ritwikranjan/copilot-agent-framework';
+import type { IAuditStore } from '@ritwikranjan/copilot-agent-framework';
 import { trackSession, trackError } from '../telemetry.js';
 
 export function createSessionsRouter(
     getSessionManager: () => SessionManager,
-    getAuditManager: () => AuditManager | null
+    getAuditStore: () => IAuditStore | null
 ): Router {
     const router = Router();
 
@@ -52,13 +52,14 @@ export function createSessionsRouter(
                 return;
             }
 
-            const auditManager = getAuditManager();
-            if (!auditManager) {
+            const auditStore = getAuditStore();
+            if (!auditStore) {
                 res.json({ interactions: [] });
                 return;
             }
 
-            const interactions = await auditManager.getSessionInteractions(sessionId);
+            await auditStore.initialize();
+            const interactions = await auditStore.getInteractionsBySession(sessionId);
             console.log(`[Sessions] GET /api/sessions/${sessionId}/history user=${username} interactions=${interactions.length}`);
             res.json({ interactions });
         } catch (error) {

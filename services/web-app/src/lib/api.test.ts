@@ -50,7 +50,7 @@ describe('API Client (browser)', () => {
 
             const result = await getSessionHistory('sess-1', 'token');
 
-            expect(mockFetch).toHaveBeenCalledWith('/api/sessions/sess-1/history', {
+            expect(mockFetch).toHaveBeenCalledWith('/api/sessions?action=history&id=sess-1', {
                 headers: { 'Authorization': 'Bearer token' },
             });
             expect(result.interactions).toHaveLength(1);

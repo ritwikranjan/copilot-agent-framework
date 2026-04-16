@@ -42,8 +42,15 @@ export default function HomePage() {
     }, [account]);
 
     const handleLogin = async () => {
-        const msalInstance = getMsalInstance();
-        await msalInstance.loginRedirect(loginRequest);
+        try {
+            const msalInstance = getMsalInstance();
+            const response = await msalInstance.loginPopup(loginRequest);
+            if (response?.account) {
+                setAccount(response.account);
+            }
+        } catch (err) {
+            console.error('Login failed:', err);
+        }
     };
 
     if (loading) {

@@ -314,6 +314,7 @@ export function defaultStreamingHandler(
                                 const reasoningDelta = event.data?.deltaContent as string | undefined;
                                 if (reasoningDelta) {
                                     reasoningContent += reasoningDelta;
+                                    streamHandler.update?.(`reasoning:${reasoningContent}`);
                                 }
                                 break;
                             }
@@ -322,6 +323,7 @@ export function defaultStreamingHandler(
                                 const reasoning = event.data?.content as string | undefined;
                                 if (reasoning && !reasoningContent) {
                                     reasoningContent = reasoning;
+                                    streamHandler.update?.(`reasoning:${reasoningContent}`);
                                 }
                                 break;
                             }

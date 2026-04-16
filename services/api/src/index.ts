@@ -41,6 +41,7 @@ const USE_COSMOS = !!(process.env.COSMOS_ENDPOINT || process.env.COSMOS_ACCOUNT_
 let _service: CopilotService | null = null;
 let _sessionManager: SessionManager | null = null;
 let _auditManager: AuditManager | null = null;
+let _auditStore: IAuditStore | null = null;
 
 function initializeServices(): void {
     const systemPrompt = loadSystemPrompt();
@@ -62,6 +63,7 @@ function initializeServices(): void {
     }
 
     _sessionManager = new SessionManager({ store: sessionStore });
+    _auditStore = ENABLE_AUDIT ? auditStore : null;
     _auditManager = ENABLE_AUDIT ? new AuditManager({ store: auditStore }) : null;
 
     _service = new CopilotService(
@@ -88,6 +90,9 @@ function getSessionManager(): SessionManager {
 }
 function getAuditManager(): AuditManager | null {
     return _auditManager;
+}
+function getAuditStore(): IAuditStore | null {
+    return _auditStore;
 }
 
 // ============ Express App ============
@@ -122,7 +127,7 @@ app.get('/api/config', (_req, res) => {
 
 // Mount route modules
 app.use('/api/chat', createChatRouter(getService));
-app.use('/api/sessions', createSessionsRouter(getSessionManager, getAuditManager));
+app.use('/api/sessions', createSessionsRouter(getSessionManager, getAuditStore));
 app.use('/api/sessions', createSharingRouter(getSessionManager));
 
 // ============ Start ============

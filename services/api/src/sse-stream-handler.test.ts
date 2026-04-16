@@ -52,6 +52,15 @@ describe('createSSEStreamHandler', () => {
         expect(event.content).toBe('🔧 Using tool: search');
     });
 
+    it('update() with reasoning prefix should write reasoning SSE event', () => {
+        const handler = createSSEStreamHandler(res);
+        handler.update!('reasoning:Let me think about this...');
+
+        const event = parseSSEEvent(res.written[0]);
+        expect(event.type).toBe('reasoning');
+        expect(event.content).toBe('Let me think about this...');
+    });
+
     it('sendMessage() should write message SSE event', async () => {
         const handler = createSSEStreamHandler(res);
         await handler.sendMessage!('Full response content');

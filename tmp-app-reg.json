@@ -1,0 +1,8 @@
+{
+  "displayName": "Copilot Web Chat (Dev)",
+  "signInAudience": "AzureADMyOrg",
+  "spa": {
+    "redirectUris": ["http://localhost:3001"]
+  },
+  "serviceManagementReference": "app://copilot-web-chat-dev"
+}

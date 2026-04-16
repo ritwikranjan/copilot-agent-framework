@@ -47,7 +47,7 @@ export const msalConfig: Configuration = {
 };
 
 export const loginRequest = {
-    scopes: [`api://${ENTRA_CLIENT_ID}/Chat.ReadWrite`],
+    scopes: ['openid', 'profile', 'email'],
 };
 
 let msalInstance: PublicClientApplication | null = null;

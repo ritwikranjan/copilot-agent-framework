@@ -5,13 +5,14 @@
  */
 
 export interface SSEEvent {
-    type: 'delta' | 'status' | 'message' | 'typing' | 'done' | 'error';
+    type: 'delta' | 'status' | 'message' | 'typing' | 'done' | 'error' | 'reasoning';
     content?: string;
 }
 
 export interface ChatMessage {
     role: 'user' | 'assistant';
     content: string;
+    reasoning?: string;
     timestamp: string;
 }
 
@@ -130,7 +131,7 @@ export async function getSessions(token: string): Promise<{ own: SessionInfo[]; 
  * Get conversation history for a session.
  */
 export async function getSessionHistory(sessionId: string, token: string): Promise<{ interactions: unknown[] }> {
-    const res = await fetch(`/api/sessions/${sessionId}/history`, {
+    const res = await fetch(`/api/sessions?action=history&id=${encodeURIComponent(sessionId)}`, {
         headers: { 'Authorization': `Bearer ${token}` },
     });
     if (!res.ok) throw new Error(`Failed to get history: ${res.status}`);

@@ -8,4 +8,13 @@ export default defineConfig({
     clean: true,
     sourcemap: true,
     noExternal: ['@ritwikranjan/copilot-agent-framework'],
+    external: [
+        '@github/copilot-sdk',
+        '@azure/cosmos',
+        '@azure/identity',
+        '@azure/monitor-opentelemetry',
+        '@opentelemetry/api',
+        'express',
+        'debug',
+    ],
 });

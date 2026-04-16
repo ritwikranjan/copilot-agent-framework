@@ -9,7 +9,7 @@ import type { Response } from 'express';
 import type { IStreamHandler } from '@ritwikranjan/copilot-agent-framework';
 
 export interface SSEEvent {
-    type: 'delta' | 'status' | 'message' | 'typing' | 'done' | 'error';
+    type: 'delta' | 'status' | 'message' | 'typing' | 'done' | 'error' | 'reasoning';
     content?: string;
 }
 
@@ -30,7 +30,12 @@ export function createSSEStreamHandler(res: Response): IStreamHandler {
             write({ type: 'delta', content });
         },
         update(status: string): void {
-            write({ type: 'status', content: status });
+            // Reasoning events use a 'reasoning:' prefix convention
+            if (status.startsWith('reasoning:')) {
+                write({ type: 'reasoning', content: status.slice(10) });
+            } else {
+                write({ type: 'status', content: status });
+            }
         },
         async sendMessage(content: string): Promise<void> {
             write({ type: 'message', content });

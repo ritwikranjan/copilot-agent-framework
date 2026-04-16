@@ -1,24 +1,76 @@
 'use client';
 
 import { useState, useRef, useEffect, useCallback } from 'react';
-import { sendMessage, type SSEEvent, type ChatMessage } from '@/lib/api';
+import { sendMessage, getSessionHistory, type SSEEvent, type ChatMessage } from '@/lib/api';
 import ReactMarkdown from 'react-markdown';
 
 interface ChatViewProps {
     conversationId?: string;
+    sessionId?: string;
     token: string;
     onConversationCreated?: (conversationId: string) => void;
 }
 
-export function ChatView({ conversationId, token, onConversationCreated }: ChatViewProps) {
+export function ChatView({ conversationId, sessionId, token, onConversationCreated }: ChatViewProps) {
     const [messages, setMessages] = useState<ChatMessage[]>([]);
     const [input, setInput] = useState('');
     const [isStreaming, setIsStreaming] = useState(false);
     const [streamingContent, setStreamingContent] = useState('');
+    const [reasoningContent, setReasoningContent] = useState('');
     const [statusMessage, setStatusMessage] = useState('');
     const abortRef = useRef<AbortController | null>(null);
     const messagesEndRef = useRef<HTMLDivElement>(null);
     const [activeConvId, setActiveConvId] = useState(conversationId);
+    const [loadingHistory, setLoadingHistory] = useState(false);
+
+    // Sync activeConvId when prop changes (session switch)
+    useEffect(() => {
+        setActiveConvId(conversationId);
+    }, [conversationId]);
+
+    // Load history only when switching to an existing session (sessionId provided)
+    useEffect(() => {
+        if (!sessionId || !token) {
+            // New chat — don't clear messages, don't load history
+            return;
+        }
+
+        let cancelled = false;
+        setLoadingHistory(true);
+        setMessages([]); // Clear for the new session being loaded
+
+        getSessionHistory(sessionId, token)
+            .then(data => {
+                if (cancelled) return;
+                const history: ChatMessage[] = [];
+                for (const interaction of (data.interactions || []) as any[]) {
+                    if (interaction.user_query) {
+                        history.push({
+                            role: 'user',
+                            content: interaction.user_query,
+                            timestamp: interaction.timestamp || '',
+                        });
+                    }
+                    if (interaction.copilot_response) {
+                        history.push({
+                            role: 'assistant',
+                            content: interaction.copilot_response,
+                            reasoning: interaction.reasoning || undefined,
+                            timestamp: interaction.timestamp || '',
+                        });
+                    }
+                }
+                setMessages(history);
+            })
+            .catch(err => {
+                if (!cancelled) console.error('Failed to load history:', err);
+            })
+            .finally(() => {
+                if (!cancelled) setLoadingHistory(false);
+            });
+
+        return () => { cancelled = true; };
+    }, [sessionId, token]);
 
     useEffect(() => {
         messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' });
@@ -32,6 +84,7 @@ export function ChatView({ conversationId, token, onConversationCreated }: ChatV
         setMessages(prev => [...prev, { role: 'user', content: userMessage, timestamp: new Date().toISOString() }]);
         setIsStreaming(true);
         setStreamingContent('');
+        setReasoningContent('');
         setStatusMessage('');
 
         // Use conversation ID or generate a new one
@@ -42,6 +95,7 @@ export function ChatView({ conversationId, token, onConversationCreated }: ChatV
         }
 
         let fullContent = '';
+        let fullReasoning = '';
 
         abortRef.current = sendMessage(userMessage, convId, token, (event: SSEEvent) => {
             switch (event.type) {
@@ -51,13 +105,22 @@ export function ChatView({ conversationId, token, onConversationCreated }: ChatV
                         setStreamingContent(fullContent);
                     }
                     break;
+                case 'reasoning':
+                    if (event.content) {
+                        fullReasoning = event.content;
+                        setReasoningContent(fullReasoning);
+                        setStatusMessage('Thinking...');
+                    }
+                    break;
                 case 'message':
                     if (event.content) {
                         setMessages(prev => [...prev, {
                             role: 'assistant',
                             content: event.content!,
+                            reasoning: fullReasoning || undefined,
                             timestamp: new Date().toISOString(),
                         }]);
+                        setReasoningContent('');
                     }
                     break;
                 case 'status':
@@ -93,7 +156,12 @@ export function ChatView({ conversationId, token, onConversationCreated }: ChatV
         <div className="flex flex-col h-full">
             {/* Messages area */}
             <div className="flex-1 overflow-y-auto p-4 space-y-4">
-                {messages.length === 0 && (
+                {loadingHistory && (
+                    <div className="text-center text-gray-400 mt-10">
+                        <p>Loading conversation history...</p>
+                    </div>
+                )}
+                {!loadingHistory && messages.length === 0 && (
                     <div className="text-center text-gray-400 mt-20">
                         <h2 className="text-xl font-semibold mb-2">Copilot Chat</h2>
                         <p>Start a conversation. Your sessions sync across Teams and web.</p>
@@ -106,6 +174,16 @@ export function ChatView({ conversationId, token, onConversationCreated }: ChatV
                                 ? 'bg-blue-600 text-white'
                                 : 'bg-gray-100 dark:bg-gray-800 text-gray-900 dark:text-gray-100'
                         }`}>
+                            {msg.role === 'assistant' && msg.reasoning && (
+                                <details className="mb-2">
+                                    <summary className="text-xs text-gray-500 dark:text-gray-400 cursor-pointer hover:text-gray-700 dark:hover:text-gray-300">
+                                        💭 Show reasoning
+                                    </summary>
+                                    <div className="mt-1 p-2 bg-gray-200/50 dark:bg-gray-700/50 rounded text-xs text-gray-600 dark:text-gray-300 prose dark:prose-invert prose-xs max-w-none">
+                                        <ReactMarkdown>{msg.reasoning}</ReactMarkdown>
+                                    </div>
+                                </details>
+                            )}
                             {msg.role === 'assistant' ? (
                                 <div className="prose dark:prose-invert prose-sm max-w-none">
                                     <ReactMarkdown>{msg.content}</ReactMarkdown>
@@ -116,6 +194,17 @@ export function ChatView({ conversationId, token, onConversationCreated }: ChatV
                         </div>
                     </div>
                 ))}
+                {/* Reasoning while streaming */}
+                {isStreaming && reasoningContent && !streamingContent && (
+                    <div className="flex justify-start">
+                        <div className="max-w-[80%] rounded-lg px-4 py-2 bg-amber-50 dark:bg-amber-900/20 border border-amber-200 dark:border-amber-800">
+                            <div className="text-xs text-amber-700 dark:text-amber-300 font-medium mb-1">💭 Thinking...</div>
+                            <div className="prose dark:prose-invert prose-xs max-w-none text-amber-800 dark:text-amber-200">
+                                <ReactMarkdown>{reasoningContent}</ReactMarkdown>
+                            </div>
+                        </div>
+                    </div>
+                )}
                 {/* Streaming indicator */}
                 {isStreaming && streamingContent && (
                     <div className="flex justify-start">

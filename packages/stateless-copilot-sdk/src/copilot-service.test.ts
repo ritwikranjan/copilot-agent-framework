@@ -753,6 +753,7 @@ describe('defaultStreamingHandler', () => {
 
         expect(response.success).toBe(true);
         expect(response.reasoning).toBe('Let me think...');
+        expect(streamHandler.update).toHaveBeenCalledWith('reasoning:Let me think...');
     });
 
     it('should call audit helpers when audit context is provided', async () => {

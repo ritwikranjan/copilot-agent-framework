@@ -37,11 +37,10 @@ function createTestApp() {
     const sessionStore = new InMemorySessionStore();
     const auditStore = new InMemoryAuditStore();
     const sessionManager = new SessionManager({ store: sessionStore });
-    const auditManager = new AuditManager({ store: auditStore });
 
     const app = express();
     app.use(express.json());
-    app.use('/api/sessions', createSessionsRouter(() => sessionManager, () => auditManager));
+    app.use('/api/sessions', createSessionsRouter(() => sessionManager, () => auditStore));
     app.use('/api/sessions', createSharingRouter(() => sessionManager));
 
     return { app, sessionManager, sessionStore };

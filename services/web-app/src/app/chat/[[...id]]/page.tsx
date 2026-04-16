@@ -14,11 +14,12 @@ import type { AccountInfo } from '@azure/msal-browser';
  * - /chat/:sessionId — existing conversation
  * - /chat/share/:shareId — shared conversation (handled via query params)
  */
-export default function ChatPage({ params }: { params: { id?: string[] } }) {
+export default function ChatPage({ params }: { params: Promise<{ id?: string[] }> }) {
     const [account, setAccount] = useState<AccountInfo | null>(null);
     const [token, setToken] = useState('');
     const [activeSession, setActiveSession] = useState<SessionInfo | null>(null);
     const [conversationId, setConversationId] = useState<string | undefined>(undefined);
+    const [chatKey, setChatKey] = useState(0);
     const [showShare, setShowShare] = useState(false);
     const [refreshTrigger, setRefreshTrigger] = useState(0);
     const [loading, setLoading] = useState(true);
@@ -41,7 +42,7 @@ export default function ChatPage({ params }: { params: { id?: string[] } }) {
                     ...loginRequest,
                     account: accounts[0],
                 });
-                setToken(tokenResponse.accessToken);
+                setToken(tokenResponse.idToken);
             } catch (err) {
                 console.error('Auth error:', err);
                 window.location.href = '/';
@@ -54,23 +55,27 @@ export default function ChatPage({ params }: { params: { id?: string[] } }) {
 
     // Set conversation ID from URL params
     useEffect(() => {
-        const idParts = params.id;
-        if (idParts && idParts.length > 0) {
-            setConversationId(idParts.join('/'));
-        }
-    }, [params.id]);
+        params.then(p => {
+            if (p.id && p.id.length > 0) {
+                setConversationId(p.id.join('/'));
+            }
+        });
+    }, [params]);
 
     const handleSelectSession = useCallback((session: SessionInfo) => {
         setActiveSession(session);
         setConversationId(session.conversation_id || session.id);
+        setChatKey(prev => prev + 1); // Force remount ChatView
     }, []);
 
     const handleNewChat = useCallback(() => {
         setActiveSession(null);
         setConversationId(undefined);
+        setChatKey(prev => prev + 1); // Force remount ChatView
     }, []);
 
     const handleConversationCreated = useCallback((convId: string) => {
+        // Don't change chatKey here — keep the current ChatView alive
         setConversationId(convId);
         setRefreshTrigger(prev => prev + 1);
     }, []);
@@ -118,9 +123,11 @@ export default function ChatPage({ params }: { params: { id?: string[] } }) {
                     </div>
                 </div>
 
-                {/* Chat */}
+                {/* Chat — key only changes on explicit session switch, not mid-conversation */}
                 <ChatView
+                    key={chatKey}
                     conversationId={conversationId}
+                    sessionId={activeSession?.id}
                     token={token}
                     onConversationCreated={handleConversationCreated}
                 />
