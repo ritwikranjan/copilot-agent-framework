@@ -233,7 +233,9 @@ module apiApp 'modules/api-service.bicep' = {
 }
 
 // Internal API URL for Teams Agent and Web App to connect
-var internalApiUrl = 'https://${apiApp.outputs.fqdn}'
+// Internal API URL using short service name (same Container Apps environment)
+// Container Apps internal ingress routes through port 80 by default
+var internalApiUrl = 'http://${apiAppName}'
 
 // Deploy Teams Copilot Agent Container App (thin frontend → API service)
 module agentApp 'modules/teams-copilot-agent.bicep' = {
@@ -283,15 +285,13 @@ module webApp 'modules/web-app.bicep' = {
 }
 
 // Cosmos DB Role Assignment for API Service Managed Identity
-// The API service owns all Cosmos DB access now (not the Teams agent)
-// Grant "Cosmos DB Built-in Data Contributor" role to the agent's managed identity
-// (API service uses the same identity via the Teams agent's MI for now)
+// The API service owns all Cosmos DB access (session + audit stores)
 resource cosmosRoleAssignment 'Microsoft.DocumentDB/databaseAccounts/sqlRoleAssignments@2023-11-15' = {
-  name: guid(cosmosAccountName, agentAppName, 'cosmos-contributor')
+  name: guid(cosmosAccountName, apiAppName, 'cosmos-contributor')
   parent: existingCosmosAccount
   properties: {
     roleDefinitionId: resourceId('Microsoft.DocumentDB/databaseAccounts/sqlRoleDefinitions', cosmosAccountName, '00000000-0000-0000-0000-000000000002') // Built-in Data Contributor
-    principalId: agentApp.outputs.managedIdentityPrincipalId
+    principalId: apiApp.outputs.systemAssignedIdentityPrincipalId
     scope: cosmosDb.outputs.id
   }
 }

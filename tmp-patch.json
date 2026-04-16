@@ -1,0 +1,9 @@
+{
+  "spa": {
+    "redirectUris": [
+      "http://localhost:3001",
+      "https://token.botframework.com/.auth/web/redirect",
+      "https://copilot-web-test-web.yellowflower-610915eb.westus3.azurecontainerapps.io"
+    ]
+  }
+}

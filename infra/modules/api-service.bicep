@@ -62,6 +62,9 @@ resource app 'Microsoft.App/containerApps@2024-03-01' = {
   name: name
   location: location
   tags: tags
+  identity: {
+    type: 'SystemAssigned'
+  }
   properties: {
     managedEnvironmentId: environmentId
     configuration: {
@@ -154,3 +157,6 @@ output fqdn string = app.properties.configuration.ingress.fqdn
 
 @description('The internal URL of the API service')
 output internalUrl string = 'https://${app.properties.configuration.ingress.fqdn}'
+
+@description('The System-Assigned Managed Identity Principal ID')
+output systemAssignedIdentityPrincipalId string = app.identity.principalId

@@ -9,7 +9,9 @@ import { PublicClientApplication, type Configuration, LogLevel } from '@azure/ms
 
 const ENTRA_CLIENT_ID = process.env.NEXT_PUBLIC_ENTRA_CLIENT_ID || '';
 const ENTRA_TENANT_ID = process.env.NEXT_PUBLIC_ENTRA_TENANT_ID || '';
-const REDIRECT_URI = process.env.NEXT_PUBLIC_REDIRECT_URI || 'http://localhost:3001';
+
+// Use window.location.origin at runtime so it works on both localhost and Azure
+const REDIRECT_URI = typeof window !== 'undefined' ? window.location.origin : (process.env.NEXT_PUBLIC_REDIRECT_URI || 'http://localhost:3001');
 
 export const msalConfig: Configuration = {
     auth: {

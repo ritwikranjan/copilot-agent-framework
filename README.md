@@ -1,54 +1,77 @@
-# Copilot CLI Server
+# Copilot Agent Framework
 
-Deploy GitHub Copilot CLI as a remote server on Azure Container Apps with an integrated Microsoft Teams bot. This provides a centralized Copilot instance accessible via Teams or programmatically via SDK.
+Framework for building stateless GitHub Copilot agents at scale — with session management, audit logging, and pluggable persistence. Deploy to Azure Container Apps with integrated Microsoft Teams bot and web chat UI.
+
+## Table of Contents
+
+- [Architecture](#architecture)
+- [Features](#features)
+- [Quick Start](#quick-start)
+- [Project Structure](#project-structure)
+- [Documentation](#documentation)
+- [Configuration](#configuration)
+- [Testing](#testing)
+- [Security](#security)
+- [Troubleshooting](#troubleshooting)
+- [Contributing](#contributing)
 
 ## Architecture
 
-The unified architecture deploys two containers in a VNet-integrated environment:
+The 4-service architecture deploys four containers in a VNet-integrated environment:
 
-```ascii
-┌─────────────────────────────────────────────────────────────────────────┐
-│                        Azure Infrastructure                              │
-├─────────────────────────────────────────────────────────────────────────┤
-│                                                                          │
-│   ┌──────────────┐     ┌────────────────────────────────────────────┐   │
-│   │     VNet     │────▶│     Container App Environment              │   │
-│   │  10.0.0.0/16 │     │     (VNet integrated)                      │   │
-│   └──────────────┘     │                                            │   │
-│                        │  ┌──────────────┐   ┌──────────────────┐   │   │
-│                        │  │ CLI Server   │◀──│ Teams Copilot    │   │   │
-│   ┌──────────────┐     │  │ TCP:3000     │   │ Agent            │   │   │
-│   │     ACR      │────▶│  │ (internal)   │   │ HTTP:3978        │   │   │
-│   └──────────────┘     │  └──────────────┘   └────────┬─────────┘   │   │
-│                        │                              │             │   │
-│   ┌──────────────┐     └──────────────────────────────┼─────────────┘   │
-│   │  Azure Bot   │◀───────────────────────────────────┘                 │
-│   │  Service     │                                                      │
-│   └──────────────┘                                                      │
-│                                                                          │
-│   ┌──────────────┐                                                      │
-│   │  Cosmos DB   │  (Audit logs - AAD auth only)                        │
-│   └──────────────┘                                                      │
-│                                                                          │
-└─────────────────────────────────────────────────────────────────────────┘
+```
+┌──────────────────────────────────────────────────────────────────────────────┐
+│                           Azure Infrastructure                               │
+├──────────────────────────────────────────────────────────────────────────────┤
+│                                                                              │
+│   ┌──────────────┐     ┌─────────────────────────────────────────────────┐  │
+│   │     VNet     │────▶│        Container App Environment                │  │
+│   │  10.0.0.0/16 │     │        (VNet integrated)                        │  │
+│   └──────────────┘     │                                                 │  │
+│                        │   ┌──────────────┐   ┌───────────────────────┐  │  │
+│   ┌──────────────┐     │   │ CLI Server   │◀──│ API Service           │  │  │
+│   │     ACR      │────▶│   │ TCP:3000     │   │ HTTP:4000             │  │  │
+│   │              │     │   │ (internal)   │   │ (internal)            │  │  │
+│   └──────────────┘     │   └──────────────┘   └──┬────────────────┬───┘  │  │
+│                        │                         │                │      │  │
+│                        │   ┌─────────────────────▼──┐  ┌─────────▼───┐  │  │
+│                        │   │ Teams Copilot Agent    │  │  Web App    │  │  │
+│                        │   │ HTTP:3978 (external)   │  │  HTTP:3001  │  │  │
+│                        │   └───────────┬────────────┘  │  (external) │  │  │
+│                        │               │               └─────────────┘  │  │
+│                        └───────────────┼────────────────────────────────┘  │
+│                                        │                                   │
+│   ┌──────────────┐                     │       ┌──────────────┐           │
+│   │  Azure Bot   │◀───────────────────-┘       │  Cosmos DB   │           │
+│   │  Service     │                              │  (AAD auth)  │           │
+│   └──────────────┘                              └──────────────┘           │
+│                                                                            │
+│   ┌──────────────┐      ┌──────────────┐      ┌──────────────┐           │
+│   │  NFS Storage │      │ App Insights │      │  Key Vault   │           │
+│   └──────────────┘      └──────────────┘      └──────────────┘           │
+│                                                                            │
+└──────────────────────────────────────────────────────────────────────────────┘
 
-Microsoft Teams ────Bot Framework────▶ Teams Copilot Agent ──▶ CLI Server
-SDK Client ─────────TCP:3000─────────▶ CLI Server (copilot --server)
+Microsoft Teams ─── Bot Framework ──▶ Teams Agent ──▶ API Service ──▶ CLI Server
+Web Browser ─────── Entra ID Auth ──▶ Web App ──────▶ API Service ──▶ CLI Server
 ```
 
 ## Features
 
-- **Unified Deployment**: Single Bicep template deploys everything
-- **Stateless Architecture**: Fully stateless design enabling high availability and horizontal scaling
+- **4-Service Architecture**: CLI Server, API Service, Teams Bot, and Web App — each independently scalable
+- **Stateless Design**: Fully stateless services enabling horizontal scaling via external state stores
+- **Multi-Platform Access**: Chat with Copilot via Microsoft Teams or the web chat UI
+- **Session Management**: Create, resume, rename, and share sessions across platforms
+- **Audit Logging**: All interactions and tool executions stored in Cosmos DB
 - **State Persistence**:
-  - **Application State**: Session metadata and mapping stored in Cosmos DB
-  - **CLI State**: Shared NFS storage for Copilot CLI session persistence
-- **Teams Integration**: Chat with Copilot directly in Microsoft Teams
-- **Audit Logging**: All interactions stored in Cosmos DB with AAD authentication
-- **Azure Bot Service**: Auto-created bot registration with managed identity
-- **VNet Security**: Internal CLI server not exposed to internet
-- **Horizontal Scaling**: Auto-scaling based on load for both Agent and CLI tiers
-- **MCP Support**: Pre-configured with `@azure/mcp` for Azure integrations
+  - **Application State**: Session metadata, sharing, and audit data in Cosmos DB
+  - **CLI State**: Shared NFS storage for Copilot CLI session files
+- **Authentication**: Microsoft Entra ID for web app, Managed Identity for Azure services
+- **Azure Bot Service**: Auto-provisioned bot registration with managed identity
+- **VNet Security**: Internal services (CLI, API) not exposed to internet
+- **Agent Profiles**: Customizable personas via `agents/` directory (system prompts + MCP tools)
+- **MCP Support**: Pre-configured `@azure/mcp` with per-agent tool configuration
+- **Observability**: Azure Monitor / OpenTelemetry integration across all services
 
 ## Quick Start
 
@@ -92,42 +115,36 @@ docker-compose -f docker-compose.unified.yml logs -f teams-copilot-agent
 
 ## Project Structure
 
-```file
+```
 copilot-agent-framework/
 ├── packages/
-│   └── stateless-copilot-sdk/             # Reusable Copilot SDK library
-│       ├── src/
-│       │   ├── copilot-service.ts    # CopilotService class
-│       │   ├── session-manager.ts    # Session lifecycle management
-│       │   ├── audit-manager.ts      # Interaction & tool logging
-│       │   ├── models.ts             # Shared types & models
-│       │   ├── interfaces.ts         # ISessionStore, IAuditStore
-│       │   └── stores/               # In-memory implementations
-│       └── README.md
+│   └── stateless-copilot-sdk/        # Reusable Copilot SDK library (npm package)
 ├── services/
-│   ├── cli/                      # CLI server implementation
-│   │   └── README.md
-│   └── teams-copilot-agent/      # Teams bot (uses stateless-copilot-sdk)
-│       ├── src/
-│       │   ├── index.ts              # Teams bot entry point
-│       │   ├── copilot-service.ts    # Teams-specific wrapper
-│       │   └── cosmos_integration/   # Cosmos DB store implementations
-│       ├── system-prompt.md
-│       ├── tools-config.json
-│       └── README.md
-├── agents/                       # Example custom agents
-├── infra/                        # Bicep templates
-├── tests/                        # Integration & E2E tests
-├── Dockerfile                    # CLI server container
-├── docker-compose.unified.yml    # Local development
-└── README.md
+│   ├── cli/                           # Copilot CLI TCP server
+│   ├── api/                           # Internal HTTP API service (Express)
+│   ├── teams-copilot-agent/           # Teams bot frontend
+│   └── web-app/                       # Next.js web chat UI
+├── agents/                            # Agent profiles (system prompts + MCP tools)
+├── infra/                             # Bicep IaC templates
+├── scripts/                           # PowerShell deployment scripts
+├── tests/                             # Integration & E2E tests
+├── docker-compose.unified.yml         # Local development (all 4 services)
+└── docker-compose.test.yml            # Legacy local development
 ```
 
 ## Documentation
 
-- **[Copilot Core Library](packages/stateless-copilot-sdk/README.md)**: Reusable, framework-agnostic library for building services on top of the Copilot SDK. Use this to create new HTTP APIs, CLIs, or other integrations.
-- **[Teams Copilot Agent](services/teams-copilot-agent/README.md)**: Teams bot service that uses stateless-copilot-sdk with Cosmos DB persistence.
-- **[Copilot CLI Server](services/cli/README.md)**: TCP server running `copilot --server`.
+| Component | Description | README |
+|-----------|-------------|--------|
+| **Copilot SDK Library** | Framework-agnostic library with session management, audit logging, streaming | [packages/stateless-copilot-sdk/](packages/stateless-copilot-sdk/README.md) |
+| **API Service** | Internal HTTP API — owns session, audit, and Copilot interaction | [services/api/](services/api/README.md) |
+| **Teams Copilot Agent** | Thin Teams bot that delegates to the API service | [services/teams-copilot-agent/](services/teams-copilot-agent/README.md) |
+| **Web App** | Next.js chat UI with Microsoft Entra ID authentication | [services/web-app/](services/web-app/README.md) |
+| **CLI Server** | TCP server running `copilot --server` with Azure MCP | [services/cli/](services/cli/README.md) |
+| **Agent Profiles** | Customizable agent personas (system prompts + tools) | [agents/](agents/README.md) |
+| **Infrastructure** | Bicep templates for Azure deployment | [infra/](infra/README.md) |
+| **Scripts** | PowerShell deployment & build scripts | [scripts/](scripts/README.md) |
+| **Tests** | Integration and E2E test suites | [tests/](tests/README.md) |
 
 ## Configuration
 
@@ -140,20 +157,43 @@ copilot-agent-framework/
 | `acrName` | ACR name (required) | - |
 | `acrResourceGroup` | ACR resource group | same as deployment |
 | `githubToken` | GitHub PAT with Copilot | (required) |
+| `azureTenantId` | Azure Tenant ID | (required) |
+| `entraClientId` | Entra ID Client ID for web app auth | - |
 | `createBotService` | Create Azure Bot | `true` |
-| `enableAudit` | Enable Cosmos DB audit | `true` |
-| `model` | Copilot model | `gpt-4.1` |
+| `cosmosServerless` | Serverless Cosmos DB | `true` |
+| `enableSessionStorage` | NFS for CLI session persistence | `true` |
+| `model` | Copilot model | `gpt-5.2` |
+| `cliMinReplicas` / `cliMaxReplicas` | CLI server autoscale | `1` / `3` |
+| `agentMinReplicas` / `agentMaxReplicas` | Agent autoscale | `1` / `3` |
 
 ### Environment Variables (Teams Copilot Agent)
 
 | Variable | Description |
 | -------- | ----------- |
-| `CLI_URL` | Internal CLI server URL |
+| `API_URL` | Internal API service URL (e.g., `http://api-service:4000`) |
+| `PORT` | HTTP port (default: `3978`) |
 | `BOT_ID` | Azure Bot App ID (from managed identity) |
 | `AZURE_CLIENT_ID` | Managed identity client ID |
+| `NODE_ENV` | Environment mode (`development` / `production`) |
+
+### Environment Variables (API Service)
+
+| Variable | Description |
+| -------- | ----------- |
+| `CLI_URL` | CLI server address (e.g., `localhost:3000`) |
+| `PORT` | HTTP port (default: `4000`) |
 | `MODEL` | Copilot model to use |
-| `ENABLE_AUDIT` | Enable audit logging |
-| `COSMOS_ENDPOINT` | Cosmos DB endpoint |
+| `ENABLE_AUDIT` | Enable audit logging (`true` / `false`) |
+| `COSMOS_ENDPOINT` | Cosmos DB endpoint (enables Cosmos stores) |
+
+### Environment Variables (Web App)
+
+| Variable | Description |
+| -------- | ----------- |
+| `API_URL` | Internal API service URL |
+| `NEXT_PUBLIC_ENTRA_CLIENT_ID` | Entra ID app registration client ID |
+| `NEXT_PUBLIC_ENTRA_TENANT_ID` | Azure tenant ID |
+| `NEXT_PUBLIC_REDIRECT_URI` | OAuth redirect URI |
 
 ## Teams Bot Setup
 
@@ -197,32 +237,52 @@ See `agents/README.md` for instructions on creating specialized agents for diffe
 
 ## Testing
 
+### Unit Tests
+
+```bash
+# SDK library
+cd packages/stateless-copilot-sdk && npm test
+
+# API service
+cd services/api && npm test
+
+# Teams agent
+cd services/teams-copilot-agent && npm test
+
+# Web app
+cd services/web-app && npm test
+```
+
 ### Integration Tests
 
 ```bash
-# Requires services running locally
-node tests/unified-integration-test.mjs
+# Requires docker-compose services running
+node tests/unified-integration-test.mjs    # Health checks + message flow
+node tests/api-integration-test.mjs        # API endpoints
+node tests/web-app-integration-test.mjs    # Web app routes
 ```
 
-### E2E Test
+### E2E Tests
 
 ```bash
-# Full end-to-end with mock service
-node tests/unified-e2e-test.mjs
+node tests/unified-e2e-test.mjs           # Full flow with mock Bot Framework
 ```
 
 ### Manual Testing
 
-Open <http://localhost:3979/devtools> in browser when running locally with `NODE_ENV=development`.
+- **Web App**: Open <http://localhost:3001> in browser
+- **DevTools**: Open <http://localhost:3979/devtools> (requires `NODE_ENV=development`)
+
+See [tests/README.md](tests/README.md) for detailed test documentation.
 
 ## Security
 
-- **Managed Identity**: Bot authentication uses Azure Managed Identity (no secrets)
-- **Stateless Design**: Containers are ephemeral; all state is persisted to external stores (Cosmos DB, Azure Files)
-- **AAD-Only Cosmos**: No SAS keys, only AAD authentication
-- **Internal CLI**: CLI server not exposed publicly
-- **VNet Integration**: All traffic stays within VNet
-- **Secrets**: GitHub token stored as Container App secret
+- **Managed Identity**: Bot and service authentication via Azure Managed Identity (no secrets)
+- **Entra ID Auth**: Web app uses Microsoft Entra ID with PKCE for user authentication
+- **AAD-Only Cosmos**: No SAS keys — `disableLocalAuth: true`
+- **Internal Services**: CLI server and API service are VNet-internal only
+- **VNet Integration**: All inter-service traffic stays within the VNet
+- **Secrets Management**: GitHub token stored as Container App secret
 
 ## Troubleshooting
 

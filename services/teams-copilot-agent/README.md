@@ -1,57 +1,53 @@
 # Teams Copilot Agent
 
-Unified Teams Bot service with direct GitHub Copilot SDK integration. This service uses the [`@ritwikranjan/copilot-agent-framework`](../../packages/stateless-copilot-sdk/README.md) library for all Copilot SDK interaction, session management, and audit logging — adding Teams-specific bot framework integration and Cosmos DB persistence on top.
+Thin Teams Bot Framework frontend that delegates all Copilot interaction to the internal [API Service](../api/README.md). Built with [`@microsoft/teams.apps`](https://www.npmjs.com/package/@microsoft/teams.apps) modular SDKs.
 
 For high-level architecture and deployment instructions, see the [Project Root README](../../README.md).
 
 ## Features
 
-- **Stateless Architecture**: Designed for horizontal scaling with session state persisted to Cosmos DB
-- **Direct SDK Integration**: Uses `@ritwikranjan/copilot-agent-framework` which wraps `@github/copilot-sdk`
-- **Audit Logging**: Session tracking, interaction logging, and tool execution monitoring via Cosmos DB
-- **MCP Tools Support**: Configurable MCP servers for extended tool capabilities
+- **Thin Proxy**: Delegates all Copilot interaction to the internal API service
+- **Streaming**: Adapts SSE responses from the API into Teams `IStreamer` interface
+- **Slash Commands**: `/help`, `/status`, `/new-session`, `/end-session`, `/resume`, `/queries`
+- **Managed Identity**: Bot Framework auth via `ManagedIdentityCredential`
 - **DevTools Support**: Local development with Teams DevTools plugin
+- **Telemetry**: OpenTelemetry metrics for throttle events, message latency, session lifecycle
 
 ## Architecture
 
-This service is a thin Teams-specific layer on top of `stateless-copilot-sdk`:
+This service is a thin Teams-specific adapter on top of the internal API service:
 
 ```
-┌─────────────────────────────────────────────────┐
-│               teams-copilot-agent               │
-│                                                 │
-│  ┌───────────────┐   ┌───────────────────────┐  │
-│  │   index.ts    │──▶│   copilot-service.ts   │  │
-│  │ (Teams Bot)   │   │ (Teams IStreamer →      │  │
-│  │               │   │  IStreamHandler adapter)│  │
-│  └───────────────┘   └───────────┬────────────┘  │
-│                                  │               │
-│  ┌───────────────────────────────▼────────────┐  │
-│  │  cosmos_integration/db.ts                      │  │
-│  │  SessionCosmosStore (ISessionStore)             │  │
-│  │  AuditCosmosStore   (IAuditStore)               │  │
-│  └────────────────────────────────────────────┘  │
-│                                                  │
-├──────────────────────────────────────────────────┤
-│           @ritwikranjan/copilot-agent-framework          │
-│                                                  │
-│  CopilotService · SessionManager · AuditManager  │
-│  Models · Interfaces · In-Memory Stores          │
-└──────────────────────────────────────────────────┘
+Teams Message
+    ↓
+  index.ts (command dispatch)
+    ↓
+  copilot-service.ts (API call wrapper)
+    ↓
+  api-client.ts (fetch with retry)
+    ↓
+  Internal API Service (SSE stream)
+    ↓
+  sse-to-teams.ts (adapt to IStreamer)
+    ↓
+  Teams Chat (streamed response)
 ```
 
-- **`copilot-service.ts`** — Wraps the library's `CopilotService` class, adapting Teams `IStreamer` to the generic `IStreamHandler` interface
-- **`cosmos_integration/db.ts`** — `SessionCosmosStore` (ISessionStore) and `AuditCosmosStore` (IAuditStore), sharing a `CosmosClientBase` for auth
-- **`cosmos_integration/index.ts`** — Re-exports library types + provides singleton factories backed by Cosmos DB
+- **`index.ts`** — Teams bot entry point, activity handler, command dispatch
+- **`copilot-service.ts`** — Wraps API client calls, backward-compatible module-level API
+- **`api-client.ts`** — HTTP client for internal API service with retry logic
+- **`sse-to-teams.ts`** — Converts SSE streaming events to Teams `IStreamer` interface
+- **`commands.ts`** — Command definitions, parsing, and help text
+- **`telemetry.ts`** — OpenTelemetry metrics and counters
 
 ## Session Management
 
-The service uses a **stateless** design pattern:
+The service uses a **stateless** design pattern — all session state is managed by the API service:
 
-1. **Cosmos DB** acts as the single source of truth for session state.
-2. **Metadata Storage**: `conversationId` (Teams) is mapped to `sessionId` (Copilot SDK).
-3. **Resume Capability**: Any container instance can resume a conversation by looking up the session ID.
-4. **Cleanup**: Expired sessions are automatically managed via TTL or lazy cleanup.
+1. **API Service** owns session creation, lookup, and persistence in Cosmos DB.
+2. **Teams Bot** passes `conversationId` with each message; the API maps it to a session.
+3. **Resume**: Any container instance can resume a conversation by calling the API.
+4. **Cleanup**: Sessions expire via TTL managed by the API service.
 
 ## Quick Start
 
@@ -103,16 +99,13 @@ The service uses a **stateless** design pattern:
 
 | Variable | Required | Default | Description |
 | -------- | -------- | ------- | ----------- |
-| `CLI_URL` | Yes | `localhost:3000` | Copilot CLI Server URL (host:port) |
+| `API_URL` | Yes | `http://api-service:4000` | Internal API service URL |
 | `PORT` | No | `3978` | HTTP port for the bot |
 | `BOT_ID` | Production | - | Microsoft Bot Framework App ID |
 | `AZURE_CLIENT_ID` | Production | - | Managed Identity Client ID |
-| `MODEL` | No | `gpt-4.1` | Copilot model to use |
-| `AGENT_NAME` | No | `teams-copilot-agent` | Agent identifier |
-| `ENABLE_AUDIT` | No | `true` | Enable/disable audit logging |
-| `COSMOS_ENDPOINT` | When audit enabled | - | Cosmos DB endpoint URL |
-| `COSMOS_DATABASE_NAME` | No | `AuditDB` | Cosmos DB database name |
 | `NODE_ENV` | No | `development` | Environment mode |
+| `LOG_LEVEL` | No | - | Logging verbosity |
+| `APPLICATIONINSIGHTS_CONNECTION_STRING` | No | - | App Insights telemetry |
 
 ### System Prompt
 
@@ -145,27 +138,26 @@ See the [Unified Deployment Guide](../../README.md#deploy) in the project root.
 
 ## Project Structure
 
-```file
+```
 services/teams-copilot-agent/
 ├── src/
 │   ├── index.ts              # Main entry point (Teams bot)
-│   ├── copilot-service.ts    # Teams adapter (wraps stateless-copilot-sdk)
+│   ├── copilot-service.ts    # API client wrapper + backward-compat API
+│   ├── api-client.ts         # HTTP client for internal API (fetch + retry)
+│   ├── sse-to-teams.ts       # SSE → Teams IStreamer adapter
 │   ├── commands.ts           # Slash command handling
-│   └── cosmos_integration/   # Persistence layer
-│       ├── index.ts          # Re-exports from stateless-copilot-sdk + singletons
-│       ├── db.ts             # SessionCosmosStore + AuditCosmosStore (split SRP)
-│       └── mock-data-store.ts # In-memory mock for testing
+│   └── telemetry.ts          # OpenTelemetry metrics
 ├── Dockerfile                # Multi-stage workspace-aware build
 ├── package.json
 ├── tsconfig.json
-├── tsup.config.js            # noExternal bundles stateless-copilot-sdk
+├── tsup.config.js
 ├── vitest.config.ts
-├── system-prompt.md          # Default system prompt
-├── tools-config.json         # Default MCP tools config
+├── system-prompt.md          # Default system prompt (fallback)
+├── tools-config.json         # Default MCP tools config (fallback)
 └── .env.example
 ```
 
-> **Note:** Most types, interfaces, and core logic live in [`@ritwikranjan/copilot-agent-framework`](../../packages/stateless-copilot-sdk/README.md). The `cosmos_integration/` files are thin re-exports plus the Cosmos DB implementations.
+> **Note:** Session management, audit logging, and Copilot SDK interaction are handled by the [API Service](../api/README.md). The Teams agent is a thin adapter.
 
 ## Testing
 
@@ -187,16 +179,16 @@ npm test
 curl https://your-agent.azurecontainerapps.io/health
 ```
 
-## Differences from Separate Services
+## Differences from Previous Architecture
 
-| Aspect | Old (3 Services) | New (Unified) |
-| ------ | ---------------- | ------------- |
-| Architecture | CLI → API → Teams Bot | CLI → Teams Agent |
-| Authentication | JWT + MSI | MSI only |
-| Deployments | 3 containers | 2 containers |
-| API Layer | HTTP REST | Direct SDK calls |
-| Latency | Higher (extra hop) | Lower |
-| Complexity | Higher | Lower |
+| Aspect | Old (2 Services) | Current (4 Services) |
+| ------ | ---------------- | -------------------- |
+| Architecture | CLI → Teams Agent (direct SDK) | CLI → API → Teams Agent / Web App |
+| Session Management | In Teams Agent (Cosmos) | Centralized in API Service |
+| Authentication | MSI only | MSI (Teams) + Entra ID (Web) |
+| Deployments | 2 containers | 4 containers |
+| API Layer | Direct SDK calls | HTTP REST via API Service |
+| Frontend | Teams only | Teams + Web App |
 
 ## Migration Notes
 
