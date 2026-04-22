@@ -43,5 +43,10 @@ RUN find ./node_modules/@github/copilot-sdk -name "*.js" -exec \
 # Mount point for system prompt and tools config
 VOLUME ["/app/config"]
 
+# Copy default agent config (can be overridden by volume mount or env vars)
+ARG AGENT_PROFILE=""
+COPY agents/${AGENT_PROFILE:-_default}/system-prompt.md ./system-prompt.md
+COPY agents/${AGENT_PROFILE:-_default}/tools-config.json ./tools-config.json
+
 EXPOSE 4000
 CMD ["node", "--experimental-specifier-resolution=node", "dist/index.js"]

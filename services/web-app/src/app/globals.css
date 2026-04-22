@@ -1,3 +1,73 @@
 @tailwind base;
 @tailwind components;
 @tailwind utilities;
+
+/* Markdown table styling */
+.prose table {
+  @apply border-collapse border border-gray-300 dark:border-gray-600 text-xs w-full my-4;
+}
+.prose th {
+  @apply border border-gray-300 dark:border-gray-600 bg-gray-200 dark:bg-gray-700 px-3 py-2 text-left font-semibold text-xs;
+}
+.prose td {
+  @apply border border-gray-300 dark:border-gray-600 px-3 py-2 text-xs break-words;
+  word-break: break-word;
+  max-width: 300px;
+}
+.prose tr:nth-child(even) {
+  @apply bg-gray-50 dark:bg-gray-800/50;
+}
+
+/* Scrollable table container */
+.prose .table-wrapper,
+.prose table {
+  @apply block overflow-x-auto;
+}
+
+/* Code inside tables — allow wrapping */
+.prose td code {
+  @apply whitespace-pre-wrap break-all;
+  word-break: break-all;
+}
+
+/* Code block styling */
+.prose pre {
+  @apply bg-gray-900 dark:bg-gray-950 text-gray-100 rounded-lg p-3 my-4 overflow-x-auto text-xs leading-relaxed;
+}
+.prose pre code {
+  @apply whitespace-pre-wrap break-words;
+  word-break: break-word;
+}
+.prose code {
+  @apply text-xs;
+}
+.prose :not(pre) > code {
+  @apply bg-gray-200 dark:bg-gray-700 text-pink-600 dark:text-pink-400 px-1 py-0.5 rounded text-xs whitespace-pre-wrap break-words;
+  word-break: break-word;
+}
+
+/* Better list styling */
+.prose ul, .prose ol {
+  @apply my-2 pl-5;
+}
+.prose li {
+  @apply my-0.5;
+}
+
+/* Headings */
+.prose h2 {
+  @apply text-base font-bold mt-4 mb-2 pb-1 border-b border-gray-200 dark:border-gray-700;
+}
+.prose h3 {
+  @apply text-sm font-semibold mt-3 mb-1;
+}
+
+/* HR */
+.prose hr {
+  @apply my-3 border-gray-200 dark:border-gray-700;
+}
+
+/* Paragraph spacing */
+.prose p {
+  @apply my-1.5 leading-relaxed;
+}

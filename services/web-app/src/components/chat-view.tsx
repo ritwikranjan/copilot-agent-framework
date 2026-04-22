@@ -3,6 +3,7 @@
 import { useState, useRef, useEffect, useCallback } from 'react';
 import { sendMessage, getSessionHistory, type SSEEvent, type ChatMessage } from '@/lib/api';
 import ReactMarkdown from 'react-markdown';
+import remarkGfm from 'remark-gfm';
 
 interface ChatViewProps {
     conversationId?: string;
@@ -169,27 +170,27 @@ export function ChatView({ conversationId, sessionId, token, onConversationCreat
                 )}
                 {messages.map((msg, i) => (
                     <div key={i} className={`flex ${msg.role === 'user' ? 'justify-end' : 'justify-start'}`}>
-                        <div className={`max-w-[80%] rounded-lg px-4 py-2 ${
+                        <div className={`rounded-lg px-4 py-2 ${
                             msg.role === 'user'
-                                ? 'bg-blue-600 text-white'
-                                : 'bg-gray-100 dark:bg-gray-800 text-gray-900 dark:text-gray-100'
+                                ? 'max-w-[75%] bg-blue-600 text-white'
+                                : 'max-w-[92%] bg-gray-50 dark:bg-gray-800/80 text-gray-900 dark:text-gray-100 border border-gray-200 dark:border-gray-700'
                         }`}>
                             {msg.role === 'assistant' && msg.reasoning && (
                                 <details className="mb-2">
-                                    <summary className="text-xs text-gray-500 dark:text-gray-400 cursor-pointer hover:text-gray-700 dark:hover:text-gray-300">
+                                    <summary className="text-xs text-gray-400 dark:text-gray-500 cursor-pointer hover:text-gray-600 dark:hover:text-gray-300 select-none">
                                         💭 Show reasoning
                                     </summary>
-                                    <div className="mt-1 p-2 bg-gray-200/50 dark:bg-gray-700/50 rounded text-xs text-gray-600 dark:text-gray-300 prose dark:prose-invert prose-xs max-w-none">
-                                        <ReactMarkdown>{msg.reasoning}</ReactMarkdown>
+                                    <div className="mt-1 p-2 bg-amber-50 dark:bg-amber-900/10 border border-amber-200 dark:border-amber-800/30 rounded text-xs text-gray-600 dark:text-gray-300 prose dark:prose-invert prose-xs max-w-none">
+                                        <ReactMarkdown remarkPlugins={[remarkGfm]}>{msg.reasoning}</ReactMarkdown>
                                     </div>
                                 </details>
                             )}
                             {msg.role === 'assistant' ? (
-                                <div className="prose dark:prose-invert prose-sm max-w-none">
-                                    <ReactMarkdown>{msg.content}</ReactMarkdown>
+                                <div className="prose dark:prose-invert prose-sm max-w-none overflow-hidden">
+                                    <ReactMarkdown remarkPlugins={[remarkGfm]}>{msg.content}</ReactMarkdown>
                                 </div>
                             ) : (
-                                <p className="whitespace-pre-wrap">{msg.content}</p>
+                                <p className="whitespace-pre-wrap text-sm">{msg.content}</p>
                             )}
                         </div>
                     </div>
@@ -200,7 +201,7 @@ export function ChatView({ conversationId, sessionId, token, onConversationCreat
                         <div className="max-w-[80%] rounded-lg px-4 py-2 bg-amber-50 dark:bg-amber-900/20 border border-amber-200 dark:border-amber-800">
                             <div className="text-xs text-amber-700 dark:text-amber-300 font-medium mb-1">💭 Thinking...</div>
                             <div className="prose dark:prose-invert prose-xs max-w-none text-amber-800 dark:text-amber-200">
-                                <ReactMarkdown>{reasoningContent}</ReactMarkdown>
+                                <ReactMarkdown remarkPlugins={[remarkGfm]}>{reasoningContent}</ReactMarkdown>
                             </div>
                         </div>
                     </div>
@@ -210,7 +211,7 @@ export function ChatView({ conversationId, sessionId, token, onConversationCreat
                     <div className="flex justify-start">
                         <div className="max-w-[80%] rounded-lg px-4 py-2 bg-gray-100 dark:bg-gray-800">
                             <div className="prose dark:prose-invert prose-sm max-w-none">
-                                <ReactMarkdown>{streamingContent}</ReactMarkdown>
+                                <ReactMarkdown remarkPlugins={[remarkGfm]}>{streamingContent}</ReactMarkdown>
                             </div>
                         </div>
                     </div>
@@ -248,3 +249,4 @@ export function ChatView({ conversationId, sessionId, token, onConversationCreat
         </div>
     );
 }
+
