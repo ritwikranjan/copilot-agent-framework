@@ -6,13 +6,14 @@
  */
 
 import type { ISessionStore } from '../interfaces.js';
-import type { SessionInfo } from '../models.js';
+import type { SessionInfo, SessionShare } from '../models.js';
 
 /**
  * In-memory implementation of ISessionStore for testing purposes.
  */
 export class InMemorySessionStore implements ISessionStore {
     private sessions: Map<string, SessionInfo> = new Map();
+    private shares: Map<string, SessionShare> = new Map();
     private initialized = false;
 
     /**
@@ -34,14 +35,16 @@ export class InMemorySessionStore implements ISessionStore {
      */
     clear(): void {
         this.sessions.clear();
+        this.shares.clear();
     }
 
     /**
      * Get the count of stored items (useful for assertions).
      */
-    getCounts(): { sessions: number } {
+    getCounts(): { sessions: number; shares: number } {
         return {
-            sessions: this.sessions.size
+            sessions: this.sessions.size,
+            shares: this.shares.size,
         };
     }
 
@@ -105,5 +108,69 @@ export class InMemorySessionStore implements ISessionStore {
             }
         }
         return null;
+    }
+
+    async getLastSessionByConversationId(username: string, conversationId: string): Promise<SessionInfo | null> {
+        let latest: SessionInfo | null = null;
+        for (const session of this.sessions.values()) {
+            if (
+                session.user_info.username === username &&
+                session.conversation_id === conversationId
+            ) {
+                if (!latest || new Date(session.start_time).getTime() > new Date(latest.start_time).getTime()) {
+                    latest = session;
+                }
+            }
+        }
+        return latest ? { ...latest } : null;
+    }
+
+    // ============ Sharing Operations ============
+
+    async shareSession(share: SessionShare): Promise<SessionShare> {
+        this.shares.set(share.id, { ...share });
+        return { ...share };
+    }
+
+    async getSharedSessions(username: string): Promise<SessionShare[]> {
+        const shared: SessionShare[] = [];
+        for (const share of this.shares.values()) {
+            if (share.shared_with_username === username) {
+                shared.push({ ...share });
+            }
+        }
+        return shared.sort((a, b) =>
+            new Date(b.created_at).getTime() - new Date(a.created_at).getTime()
+        );
+    }
+
+    async getSessionByShareId(shareId: string): Promise<SessionInfo | null> {
+        for (const share of this.shares.values()) {
+            if (share.share_id === shareId) {
+                const session = this.sessions.get(share.session_id);
+                return session ? { ...session } : null;
+            }
+        }
+        return null;
+    }
+
+    async revokeShare(shareId: string): Promise<boolean> {
+        for (const [id, share] of this.shares.entries()) {
+            if (share.share_id === shareId) {
+                this.shares.delete(id);
+                return true;
+            }
+        }
+        return false;
+    }
+
+    async getSharesForSession(sessionId: string): Promise<SessionShare[]> {
+        const shares: SessionShare[] = [];
+        for (const share of this.shares.values()) {
+            if (share.session_id === sessionId) {
+                shares.push({ ...share });
+            }
+        }
+        return shares;
     }
 }

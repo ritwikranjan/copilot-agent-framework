@@ -38,3 +38,5 @@ scratch.txt
 
 output/*
 agents/*
+services/web-app/.next/
+services/web-app/next-env.d.ts

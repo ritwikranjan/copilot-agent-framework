@@ -1,12 +1,14 @@
 /**
- * Teams Copilot Agent - Unified service combining Teams Bot with direct Copilot SDK integration.
+ * Teams Copilot Agent — Thin frontend that delegates to the internal API service.
  * 
  * This service:
  * - Handles Teams Bot Framework messages using @microsoft/teams.apps SDK
- * - Connects directly to Copilot CLI server via @github/copilot-sdk
- * - Includes session management and audit logging via Cosmos DB
- * - Supports MCP tools and configurable system prompts
+ * - Delegates all copilot interaction to the internal API service
+ * - Adapts SSE streaming responses to Teams IStreamer
  */
+
+// Telemetry MUST be imported first — before any other modules — so OpenTelemetry can patch them
+import { trackMessageStart, trackMessageEnd, trackSession, trackError } from './telemetry.js';
 
 import { App, type IPlugin } from '@microsoft/teams.apps';
 import { BotBuilderPlugin } from '@microsoft/teams.botbuilder';
@@ -19,16 +21,33 @@ import {
     sendMessageStreaming,
     getConversationSessionStatus,
     endConversationSession,
-    resumeConversationSession
+    resumeConversationSession,
+    getKustoQueriesForSession,
+    type UserInfo,
 } from './copilot-service.js';
-import { formatRemainingTime, type UserInfo } from './cosmos_integration/index.js';
 import { COMMANDS, isCommand, getHelpText } from './commands.js';
+
+/** Format remaining time as human-readable string */
+function formatRemainingTime(remainingMs: number): string {
+    const hours = Math.floor(remainingMs / (60 * 60 * 1000));
+    const minutes = Math.floor((remainingMs % (60 * 60 * 1000)) / (60 * 1000));
+    if (hours > 0) return `${hours}h ${minutes}m`;
+    return `${minutes}m`;
+}
 
 // Configuration
 const PORT = parseInt(process.env.PORT || '3978');
 const BOT_ID = process.env.BOT_ID;
 const AZURE_CLIENT_ID = process.env.AZURE_CLIENT_ID || process.env.BOT_ID;
 const IS_DEV = process.env.NODE_ENV !== 'production';
+
+// Prevent unhandled rejections from crashing the process.
+// The Teams SDK internal retry mechanism can throw 403 errors on stream operations
+// (e.g. informative stream chunks rejected by Bot Framework after stream expiry).
+// These are non-fatal — the actual content is delivered via sendMessage().
+process.on('unhandledRejection', (reason) => {
+    console.error('[unhandledRejection] Suppressed:', reason instanceof Error ? reason.message : reason);
+});
 
 /**
  * Create token factory for User-Assigned MSI.
@@ -137,6 +156,7 @@ app.on('message', async ({ send, activity, stream }) => {
     const conversationId = conversation?.id || '';
     
     console.log(`[Message] "${userMessage}" from ${userInfo.username}`);
+    const msgStartTime = trackMessageStart();
     
     // Handle commands
     if (userMessage.startsWith('/')) {
@@ -168,6 +188,7 @@ app.on('message', async ({ send, activity, stream }) => {
         // New session command
         if (isCommand(userMessage, COMMANDS.NEW_SESSION)) {
             const existed = await endConversationSession(conversationId, userInfo.username);
+            trackSession('new');
             if (existed) {
                 await send('🔄 Previous session ended. Send a message to start a fresh conversation!');
             } else {
@@ -180,9 +201,46 @@ app.on('message', async ({ send, activity, stream }) => {
         if (isCommand(userMessage, COMMANDS.END_SESSION)) {
             const ended = await endConversationSession(conversationId, userInfo.username);
             if (ended) {
+                trackSession('ended');
                 await send('👋 Session ended. Thanks for chatting! Send a message anytime to start a new conversation.');
             } else {
                 await send('📭 No active session to end.');
+            }
+            return;
+        }
+        
+        // Show Kusto queries command
+        if (isCommand(userMessage, COMMANDS.SHOW_KUSTO_QUERIES)) {
+            // Parse optional page number: /queries 2
+            const parts = userMessage.trim().split(/\s+/);
+            const page = parts.length > 1 ? parseInt(parts[1], 10) || 1 : 1;
+
+            try {
+                const result = await getKustoQueriesForSession(conversationId, userInfo.username, page);
+                if (!result) {
+                    await send('📭 No active session. Send a message to start a conversation first.');
+                    return;
+                }
+                if (result.totalQueries === 0) {
+                    await send('🔍 No Kusto queries have been executed in this session yet.');
+                    return;
+                }
+
+                let msg = `**📊 KQL Queries (page ${result.page}/${result.totalPages}, ${result.totalQueries} total)**\n\n`;
+                for (const q of result.queries) {
+                    const time = new Date(q.timestamp).toLocaleTimeString('en-US', { hour: '2-digit', minute: '2-digit', second: '2-digit' });
+                    msg += `---\n**#${q.index}** — \`${time}\` · \`${q.database}\`\n\n`;
+                    msg += '```kql\n' + q.query + '\n```\n\n';
+                }
+
+                if (result.totalPages > 1) {
+                    msg += `_Use \`/queries ${result.page + 1}\` for next page_`;
+                }
+
+                await send(msg);
+            } catch (err) {
+                console.error('[show_kusto_queries] Error:', err);
+                await send('❌ Failed to retrieve queries. Please try again.');
             }
             return;
         }
@@ -194,9 +252,14 @@ app.on('message', async ({ send, activity, stream }) => {
                 const remaining = status.remainingTimeMs ? formatRemainingTime(status.remainingTimeMs) : 'unknown';
                 await send(`✅ Your session is still active (${remaining} remaining). Just continue chatting!`);
             } else {
-                // Clean up any expired session and create new
-                await resumeConversationSession(conversationId, userInfo);
-                await send('🔄 Ready to continue! Send your message to start a new 12-hour session.');
+                // Resume: create new session carrying over the copilot_session_id
+                const result = await resumeConversationSession(conversationId, userInfo);
+                trackSession('resume');
+                if (result.hadCopilotSession) {
+                    await send('🔄 Session resumed with previous conversation context. Continue where you left off!');
+                } else {
+                    await send('🔄 New session started (no prior context found). Send your message to begin!');
+                }
             }
             return;
         }
@@ -221,9 +284,11 @@ app.on('message', async ({ send, activity, stream }) => {
         );
         
         console.log(`[Response] success=${response.success}, sessionId=${response.sessionId}`);
+        trackMessageEnd(msgStartTime, response.success);
         
         // Handle session expiration
         if (response.sessionExpired) {
+            trackSession('expired');
             await send(response.error || 'Your session has expired. Send `/resume` to continue.');
             return;
         }
@@ -235,6 +300,8 @@ app.on('message', async ({ send, activity, stream }) => {
         }
     } catch (error) {
         console.error('[Error]', error);
+        trackMessageEnd(msgStartTime, false);
+        trackError('message_handler', (error as Error).message);
         await send('Sorry, something went wrong. Please try again.');
     }
 });

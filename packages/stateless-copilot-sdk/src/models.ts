@@ -6,6 +6,7 @@
  */
 
 import { v4 as uuidv4 } from 'uuid';
+import type { ILogger } from './logger.js';
 
 // ============ Enums ============
 
@@ -19,6 +20,11 @@ export enum ToolExecutionStatus {
     STARTED = 'started',
     COMPLETED = 'completed',
     ERROR = 'error'
+}
+
+export enum ShareRole {
+    VIEWER = 'viewer',
+    COLLABORATOR = 'collaborator'
 }
 
 // ============ Interfaces ============
@@ -53,6 +59,10 @@ export interface SessionInfo {
     expires_at?: string;
     /** Last activity timestamp (ISO 8601) */
     last_activity_at?: string;
+    /** Unique shareable identifier (short, URL-safe) */
+    share_id?: string;
+    /** Whether this session has been shared */
+    is_shared?: boolean;
 }
 
 export interface Interaction {
@@ -107,6 +117,23 @@ export interface CopilotResponse {
     remainingSessionTime?: string;
 }
 
+export interface SessionShare {
+    /** Unique share ID (Cosmos DB document ID) */
+    id: string;
+    /** The session being shared */
+    session_id: string;
+    /** Owner of the session */
+    session_owner: string;
+    /** Username the session is shared with */
+    shared_with_username: string;
+    /** Share role */
+    role: ShareRole;
+    /** When the share was created (ISO 8601) */
+    created_at: string;
+    /** Short URL-safe share identifier for link sharing */
+    share_id: string;
+}
+
 // ============ MCP Configuration Types ============
 
 export interface MCPServerConfigInput {
@@ -142,6 +169,84 @@ export interface IStreamHandler {
     typing?(): void;
     /** Close the stream */
     close?(): void;
+}
+
+// ============ Process Message Context ============
+
+/**
+ * Audit helpers exposed to handleEvent callbacks.
+ * Provides a simplified interface for logging interactions and tools
+ * without requiring direct access to the AuditManager.
+ */
+export interface AuditContext {
+    /** Start a new interaction (user turn). Returns interaction ID. */
+    startInteraction(userQuery: string): Promise<string>;
+    /** Complete the current interaction with the agent's response. */
+    completeInteraction(response?: string, reasoning?: string): Promise<void>;
+    /** Log the start of a tool execution. Returns audit tool ID. */
+    logToolStart(toolName: string, args?: Record<string, unknown>): Promise<string>;
+    /** Log the completion of a tool execution. */
+    logToolComplete(auditToolId: string, result?: unknown): Promise<void>;
+    /** Log a tool error. */
+    logToolError(auditToolId: string, error: string): Promise<void>;
+}
+
+/**
+ * Context passed to the user's handleEvent callback.
+ * Provides everything needed to interact with the copilot session.
+ */
+export interface ProcessMessageContext {
+    /** The resolved session info */
+    session: SessionInfo;
+    /** The copilot SDK session (subscribe to events, send messages) */
+    copilotSession: {
+        /** Subscribe to copilot events */
+        on(handler: (event: { type: string; data?: Record<string, unknown> }) => void): () => void;
+        /** Send a message to the copilot */
+        send(params: { prompt: string }): Promise<void>;
+        /** Send and wait for response (non-streaming) */
+        sendAndWait?(params: { prompt: string }): Promise<unknown>;
+        /** The copilot session ID */
+        sessionId: string;
+    };
+    /** Audit helpers (null if audit is disabled) */
+    audit: AuditContext | null;
+    /** Logger scoped to this request */
+    logger: ILogger;
+    /** The user's message */
+    message: string;
+    /** User info for this request */
+    userInfo: UserInfo;
+    /** Service configuration */
+    config: {
+        model: string;
+        agentName: string;
+    };
+}
+
+/**
+ * Function signature for the user's event handler.
+ * The framework calls this after setting up the session and copilot client.
+ * The handler is responsible for subscribing to events and processing the response.
+ */
+export type HandleEventFn = (ctx: ProcessMessageContext) => Promise<CopilotResponse>;
+
+/**
+ * Options for processMessage().
+ */
+export interface ProcessMessageOptions {
+    /** The user message to send */
+    message: string;
+    /** User information */
+    userInfo: UserInfo;
+    /** The event handler that processes copilot events */
+    handleEvent: HandleEventFn;
+    /** Conversation ID for session persistence */
+    conversationId?: string;
+    /** Explicit session ID to resume */
+    sessionId?: string;
+    /** Session name */
+    sessionName?: string;
 }
 
 // ============ Constants ============
@@ -210,6 +315,33 @@ export function createToolExecution(
 }
 
 // ============ Helper Functions ============
+
+/**
+ * Generate a short, URL-safe share ID (8 chars).
+ */
+function generateShareId(): string {
+    return uuidv4().replace(/-/g, '').substring(0, 8);
+}
+
+/**
+ * Create a new session share record.
+ */
+export function createSessionShare(
+    sessionId: string,
+    sessionOwner: string,
+    sharedWithUsername: string,
+    role: ShareRole = ShareRole.COLLABORATOR
+): SessionShare {
+    return {
+        id: uuidv4(),
+        session_id: sessionId,
+        session_owner: sessionOwner,
+        shared_with_username: sharedWithUsername,
+        role,
+        created_at: new Date().toISOString(),
+        share_id: generateShareId(),
+    };
+}
 
 /**
  * Get the partition key for a session (username)

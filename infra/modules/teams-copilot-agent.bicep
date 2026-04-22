@@ -1,5 +1,6 @@
 // Teams Copilot Agent Container App module
-// Creates a Container App for the Teams Bot with Managed Identity
+// Thin frontend that delegates to the internal API service.
+// Creates a Container App for the Teams Bot with Managed Identity.
 
 @description('Name of the Container App')
 param name string
@@ -23,20 +24,8 @@ param acrUsername string
 @secure()
 param acrPassword string
 
-@description('CLI Server URL (internal)')
-param cliUrl string
-
-@description('Cosmos DB endpoint')
-param cosmosEndpoint string
-
-@description('Cosmos DB database name')
-param cosmosDatabase string
-
-@description('Model to use')
-param model string = 'gpt-4.1'
-
-@description('Agent name')
-param agentName string = 'teams-copilot-agent'
+@description('Internal API service URL')
+param apiUrl string
 
 @description('Target port for the container')
 param targetPort int = 3978
@@ -52,6 +41,9 @@ param enableUserAuth bool = true
 
 @description('Azure Tenant ID')
 param azureTenantId string
+
+@description('Application Insights connection string')
+param appInsightsConnectionString string = ''
 
 @description('Tags for resources')
 param tags object = {}
@@ -107,32 +99,12 @@ resource containerApp 'Microsoft.App/containerApps@2023-05-01' = {
           }
           env: [
             {
-              name: 'CLI_URL'
-              value: cliUrl
-            }
-            {
-              name: 'MODEL'
-              value: model
-            }
-            {
-              name: 'AGENT_NAME'
-              value: agentName
+              name: 'API_URL'
+              value: apiUrl
             }
             {
               name: 'PORT'
               value: string(targetPort)
-            }
-            {
-              name: 'ENABLE_AUDIT'
-              value: 'true'
-            }
-            {
-              name: 'COSMOS_ENDPOINT'
-              value: cosmosEndpoint
-            }
-            {
-              name: 'COSMOS_DATABASE_NAME'
-              value: cosmosDatabase
             }
             {
               name: 'BOT_ID'
@@ -140,10 +112,6 @@ resource containerApp 'Microsoft.App/containerApps@2023-05-01' = {
             }
             {
               name: 'AZURE_CLIENT_ID'
-              value: managedIdentity.properties.clientId
-            }
-            {
-              name: 'USER_ASSIGNED_MSI_CLIENT_ID'
               value: managedIdentity.properties.clientId
             }
             {
@@ -157,6 +125,10 @@ resource containerApp 'Microsoft.App/containerApps@2023-05-01' = {
             {
               name: 'NODE_ENV'
               value: 'production'
+            }
+            {
+              name: 'APPLICATIONINSIGHTS_CONNECTION_STRING'
+              value: appInsightsConnectionString
             }
           ]
         }

@@ -5,7 +5,7 @@
 import { describe, it, expect, beforeEach, vi, afterEach } from 'vitest';
 import { SessionManager, SessionNotFoundError, SessionExpiredError, SessionNameConflictError } from './session-manager.js';
 import { InMemorySessionStore } from './stores/in-memory-session-store.js';
-import { SessionStatus, SESSION_EXPIRATION_MS } from './models.js';
+import { SessionStatus, ShareRole, SESSION_EXPIRATION_MS } from './models.js';
 import type { UserInfo } from './models.js';
 
 describe('SessionManager', () => {
@@ -367,6 +367,185 @@ describe('SessionManager', () => {
 
             expect(result.isNew).toBe(true);
             expect(result.session.id).not.toBe(created.session.id);
+        });
+    });
+
+    describe('reactivateSession', () => {
+        it('should reactivate the most recent session for a conversation', async () => {
+            // Create and end a session
+            const { session } = await manager.resolveSession(userInfo, { conversationId: 'conv-reac' });
+            await manager.endSession('testuser', session.id);
+
+            // Verify it's ended
+            const status = await manager.getSessionStatus('testuser', 'conv-reac');
+            expect(status.exists).toBe(false);
+
+            // Reactivate
+            const reactivated = await manager.reactivateSession('testuser', 'conv-reac');
+
+            expect(reactivated).not.toBeNull();
+            expect(reactivated!.id).toBe(session.id);
+            expect(reactivated!.status).toBe(SessionStatus.ACTIVE);
+            expect(reactivated!.end_time).toBeUndefined();
+            expect(reactivated!.expires_at).toBeDefined();
+
+            // New expiry should be in the future
+            const expiresAt = new Date(reactivated!.expires_at!).getTime();
+            expect(expiresAt).toBeGreaterThan(Date.now());
+        });
+
+        it('should return null when no session exists for conversation', async () => {
+            const result = await manager.reactivateSession('testuser', 'no-conv');
+            expect(result).toBeNull();
+        });
+
+        it('should extend expiry by session expiration duration', async () => {
+            vi.useFakeTimers();
+            const { session } = await manager.resolveSession(userInfo, { conversationId: 'conv-reac-time' });
+            await manager.endSession('testuser', session.id);
+
+            // Advance time
+            vi.advanceTimersByTime(60_000);
+
+            const reactivated = await manager.reactivateSession('testuser', 'conv-reac-time');
+
+            const expiresAt = new Date(reactivated!.expires_at!).getTime();
+            const expectedExpiry = Date.now() + SESSION_EXPIRATION_MS;
+            // Allow 1 second tolerance
+            expect(expiresAt).toBeGreaterThanOrEqual(expectedExpiry - 1000);
+            expect(expiresAt).toBeLessThanOrEqual(expectedExpiry + 1000);
+        });
+
+        it('should not preserve copilot_session_id after endSession (cleared by end)', async () => {
+            const { session } = await manager.resolveSession(userInfo, { conversationId: 'conv-reac-cplt' });
+            await manager.updateCopilotSessionId('testuser', session.id, 'cplt-123');
+            await manager.endSession('testuser', session.id);
+
+            const reactivated = await manager.reactivateSession('testuser', 'conv-reac-cplt');
+            // endSession clears copilot_session_id, so it's undefined after reactivation
+            expect(reactivated!.copilot_session_id).toBeUndefined();
+            expect(reactivated!.status).toBe(SessionStatus.ACTIVE);
+        });
+    });
+
+    describe('shareSession', () => {
+        const otherUser: UserInfo = { username: 'otheruser', hostname: 'other-host' };
+
+        it('should create a share and return SessionShare', async () => {
+            const { session } = await manager.resolveSession(userInfo, { conversationId: 'conv-share' });
+
+            const share = await manager.shareSession(
+                session.id, 'testuser', 'otheruser', ShareRole.COLLABORATOR
+            );
+
+            expect(share.session_id).toBe(session.id);
+            expect(share.session_owner).toBe('testuser');
+            expect(share.shared_with_username).toBe('otheruser');
+            expect(share.role).toBe(ShareRole.COLLABORATOR);
+            expect(share.share_id).toBeDefined();
+            expect(share.share_id.length).toBe(8);
+        });
+
+        it('should throw SessionNotFoundError for non-existent session', async () => {
+            await expect(
+                manager.shareSession('nonexistent', 'testuser', 'otheruser')
+            ).rejects.toThrow(SessionNotFoundError);
+        });
+
+        it('should mark session as shared', async () => {
+            const { session } = await manager.resolveSession(userInfo, { conversationId: 'conv-share-mark' });
+            await manager.shareSession(session.id, 'testuser', 'otheruser');
+
+            const updated = await manager.getSession('testuser', session.id);
+            expect(updated!.is_shared).toBe(true);
+        });
+    });
+
+    describe('getAccessibleSessions', () => {
+        it('should return own sessions and shared sessions', async () => {
+            // Create session for testuser
+            const { session: ownSession } = await manager.resolveSession(userInfo, { conversationId: 'conv-own' });
+
+            // Create session for otheruser and share with testuser
+            const otherUser: UserInfo = { username: 'otheruser', hostname: 'other-host' };
+            const { session: sharedSession } = await manager.resolveSession(otherUser, { conversationId: 'conv-other' });
+            await manager.shareSession(sharedSession.id, 'otheruser', 'testuser', ShareRole.VIEWER);
+
+            const result = await manager.getAccessibleSessions('testuser');
+
+            expect(result.own.length).toBe(1);
+            expect(result.own[0].id).toBe(ownSession.id);
+            expect(result.shared.length).toBe(1);
+            expect(result.shared[0].session.id).toBe(sharedSession.id);
+            expect(result.shared[0].share.role).toBe(ShareRole.VIEWER);
+        });
+    });
+
+    describe('canAccessSession', () => {
+        it('should return owner for session owner', async () => {
+            const { session } = await manager.resolveSession(userInfo, { conversationId: 'conv-access-own' });
+
+            const access = await manager.canAccessSession(session.id, 'testuser');
+            expect(access).toBe('owner');
+        });
+
+        it('should return role for shared user', async () => {
+            const { session } = await manager.resolveSession(userInfo, { conversationId: 'conv-access-shared' });
+            await manager.shareSession(session.id, 'testuser', 'otheruser', ShareRole.COLLABORATOR);
+
+            const access = await manager.canAccessSession(session.id, 'otheruser');
+            expect(access).toBe(ShareRole.COLLABORATOR);
+        });
+
+        it('should return null for non-authorized user', async () => {
+            const { session } = await manager.resolveSession(userInfo, { conversationId: 'conv-access-denied' });
+
+            const access = await manager.canAccessSession(session.id, 'stranger');
+            expect(access).toBeNull();
+        });
+    });
+
+    describe('revokeShare', () => {
+        it('should revoke a share by shareId', async () => {
+            const { session } = await manager.resolveSession(userInfo, { conversationId: 'conv-revoke' });
+            const share = await manager.shareSession(session.id, 'testuser', 'otheruser');
+
+            const revoked = await manager.revokeShare(share.share_id, 'testuser');
+            expect(revoked).toBe(true);
+
+            // Verify the share is gone
+            const access = await manager.canAccessSession(session.id, 'otheruser');
+            expect(access).toBeNull();
+        });
+
+        it('should return false for non-existent shareId', async () => {
+            const revoked = await manager.revokeShare('nonexistent', 'testuser');
+            expect(revoked).toBe(false);
+        });
+
+        it('should throw error if non-owner tries to revoke', async () => {
+            const { session } = await manager.resolveSession(userInfo, { conversationId: 'conv-revoke-deny' });
+            const share = await manager.shareSession(session.id, 'testuser', 'otheruser');
+
+            await expect(
+                manager.revokeShare(share.share_id, 'otheruser')
+            ).rejects.toThrow('not the owner');
+        });
+    });
+
+    describe('getSessionByShareId', () => {
+        it('should return session by share link', async () => {
+            const { session } = await manager.resolveSession(userInfo, { conversationId: 'conv-link' });
+            const share = await manager.shareSession(session.id, 'testuser', 'otheruser');
+
+            const found = await manager.getSessionByShareId(share.share_id);
+            expect(found).not.toBeNull();
+            expect(found!.id).toBe(session.id);
+        });
+
+        it('should return null for unknown shareId', async () => {
+            const found = await manager.getSessionByShareId('unknown');
+            expect(found).toBeNull();
         });
     });
 });

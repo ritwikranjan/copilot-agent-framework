@@ -1,5 +1,6 @@
-// Main Bicep template for Unified Teams Copilot Agent
-// Deploys: VNet, Container App Environment, CLI Server, Teams Copilot Agent, Cosmos DB (always enabled)
+// Main Bicep template for Copilot Agent Framework
+// 4-service architecture: CLI Server, API Service, Teams Bot, Web App
+// Plus: VNet, Container App Environment, Cosmos DB, Bot Service
 
 targetScope = 'resourceGroup'
 
@@ -21,11 +22,23 @@ param cliImageName string = 'copilot-cli-server'
 @description('CLI Server container image tag')
 param cliImageTag string = 'latest'
 
+@description('API Service container image name')
+param apiImageName string = 'copilot-api-service'
+
+@description('API Service container image tag')
+param apiImageTag string = 'latest'
+
 @description('Teams Copilot Agent container image name')
 param agentImageName string = 'teams-copilot-agent'
 
 @description('Teams Copilot Agent container image tag')
 param agentImageTag string = 'latest'
+
+@description('Web App container image name')
+param webImageName string = 'copilot-web-app'
+
+@description('Web App container image tag')
+param webImageTag string = 'latest'
 
 @description('GitHub PAT with Copilot access')
 @secure()
@@ -41,16 +54,19 @@ param cliPort int = 3000
 param agentPort int = 3978
 
 @description('Model to use')
-param model string = 'gpt-4.1'
+param model string = 'gpt-5.2'
 
 @description('Agent name identifier')
-param agentName string = 'teams-copilot-agent'
+param agentName string = 'copilot-api'
 
 @description('Enable serverless Cosmos DB (recommended for dev/test)')
 param cosmosServerless bool = true
 
 @description('Azure Tenant ID for bot and identity configuration')
 param azureTenantId string
+
+@description('Entra ID Client ID for web app authentication')
+param entraClientId string = ''
 
 @description('Minimum replicas for CLI server')
 param cliMinReplicas int = 1
@@ -80,7 +96,9 @@ param tags object = {
 var vnetName = '${baseName}-vnet'
 var envName = '${baseName}-env'
 var cliAppName = '${baseName}-cli'
+var apiAppName = '${baseName}-api'
 var agentAppName = '${baseName}-agent'
+var webAppName = '${baseName}-web'
 var cosmosAccountName = '${baseName}-cosmos'
 var nfsStorageAccountName = replace('${baseName}nfssa', '-', '')  // Storage account names cannot have hyphens
 
@@ -92,7 +110,9 @@ resource acr 'Microsoft.ContainerRegistry/registries@2023-07-01' existing = {
 
 var acrLoginServer = acr.properties.loginServer
 var cliContainerImage = '${acrLoginServer}/${cliImageName}:${cliImageTag}'
+var apiContainerImage = '${acrLoginServer}/${apiImageName}:${apiImageTag}'
 var agentContainerImage = '${acrLoginServer}/${agentImageName}:${agentImageTag}'
+var webContainerImage = '${acrLoginServer}/${webImageName}:${webImageTag}'
 
 // Deploy VNet with /16 CIDR
 module vnet 'modules/vnet.bicep' = {
@@ -174,12 +194,50 @@ module cosmosDb 'modules/cosmos-db.bicep' = {
   }
 }
 
-// Internal CLI URL for Teams Agent to connect
+// Deploy Application Insights for telemetry (throttling, latencies, conversation trends)
+module appInsights 'modules/app-insights.bicep' = {
+  name: 'appinsights-deployment'
+  params: {
+    baseName: baseName
+    location: location
+    tags: tags
+  }
+}
+
+// Internal CLI URL for API Service to connect
 // Using short service name format for Container Apps internal service discovery
 var internalCliUrl = '${cliAppName}:${cliPort}'
 
-// Deploy Teams Copilot Agent Container App
-// The managed identity client ID is automatically used as the Bot ID
+// Deploy API Service (internal-only, no external endpoint)
+module apiApp 'modules/api-service.bicep' = {
+  name: 'api-deployment'
+  params: {
+    name: apiAppName
+    location: location
+    environmentId: env.outputs.id
+    containerImage: apiContainerImage
+    acrLoginServer: acrLoginServer
+    acrUsername: acr.listCredentials().username
+    acrPassword: acr.listCredentials().passwords[0].value
+    cliUrl: internalCliUrl
+    model: model
+    agentName: agentName
+    cosmosEndpoint: cosmosDb.outputs.endpoint
+    cosmosDatabaseName: cosmosDb.outputs.databaseName
+    appInsightsConnectionString: appInsights.outputs.connectionString
+    tags: tags
+  }
+  dependsOn: [
+    cliApp
+  ]
+}
+
+// Internal API URL for Teams Agent and Web App to connect
+// Internal API URL using short service name (same Container Apps environment)
+// Container Apps internal ingress routes through port 80 by default
+var internalApiUrl = 'http://${apiAppName}'
+
+// Deploy Teams Copilot Agent Container App (thin frontend → API service)
 module agentApp 'modules/teams-copilot-agent.bicep' = {
   name: 'agent-deployment'
   params: {
@@ -190,11 +248,8 @@ module agentApp 'modules/teams-copilot-agent.bicep' = {
     acrLoginServer: acrLoginServer
     acrUsername: acr.listCredentials().username
     acrPassword: acr.listCredentials().passwords[0].value
-    cliUrl: internalCliUrl
-    cosmosEndpoint: cosmosDb.outputs.endpoint
-    cosmosDatabase: cosmosDb.outputs.databaseName
-    model: model
-    agentName: agentName
+    apiUrl: internalApiUrl
+    appInsightsConnectionString: appInsights.outputs.connectionString
     targetPort: agentPort
     minReplicas: agentMinReplicas
     maxReplicas: agentMaxReplicas
@@ -203,18 +258,40 @@ module agentApp 'modules/teams-copilot-agent.bicep' = {
     tags: tags
   }
   dependsOn: [
-    cliApp
+    apiApp
   ]
 }
 
-// Cosmos DB Role Assignment for Managed Identity
-// Grant "Cosmos DB Built-in Data Contributor" role to the agent's managed identity
+// Deploy Web App (external, Next.js frontend with MSAL auth)
+module webApp 'modules/web-app.bicep' = {
+  name: 'web-deployment'
+  params: {
+    name: webAppName
+    location: location
+    environmentId: env.outputs.id
+    containerImage: webContainerImage
+    acrLoginServer: acrLoginServer
+    acrUsername: acr.listCredentials().username
+    acrPassword: acr.listCredentials().passwords[0].value
+    apiUrl: internalApiUrl
+    entraClientId: entraClientId
+    entraTenantId: azureTenantId
+    appInsightsConnectionString: appInsights.outputs.connectionString
+    tags: tags
+  }
+  dependsOn: [
+    apiApp
+  ]
+}
+
+// Cosmos DB Role Assignment for API Service Managed Identity
+// The API service owns all Cosmos DB access (session + audit stores)
 resource cosmosRoleAssignment 'Microsoft.DocumentDB/databaseAccounts/sqlRoleAssignments@2023-11-15' = {
-  name: guid(cosmosAccountName, agentAppName, 'cosmos-contributor')
+  name: guid(cosmosAccountName, apiAppName, 'cosmos-contributor')
   parent: existingCosmosAccount
   properties: {
     roleDefinitionId: resourceId('Microsoft.DocumentDB/databaseAccounts/sqlRoleDefinitions', cosmosAccountName, '00000000-0000-0000-0000-000000000002') // Built-in Data Contributor
-    principalId: agentApp.outputs.managedIdentityPrincipalId
+    principalId: apiApp.outputs.systemAssignedIdentityPrincipalId
     scope: cosmosDb.outputs.id
   }
 }
@@ -307,5 +384,20 @@ output cliServerIdentityPrincipalId string = cliApp.outputs.systemAssignedIdenti
 @description('NFS Storage Account Name (for session persistence)')
 output nfsStorageAccountName string = enableSessionStorage ? nfsStorageAccountName : ''
 
+@description('Application Insights Connection String')
+output appInsightsConnectionString string = appInsights.outputs.connectionString
+
 @description('Session storage enabled')
 output sessionStorageEnabled bool = enableSessionStorage
+
+@description('API Service internal URL')
+output apiInternalUrl string = internalApiUrl
+
+@description('API Service FQDN (internal)')
+output apiFqdn string = apiApp.outputs.fqdn
+
+@description('Web App URL')
+output webAppUrl string = webApp.outputs.webUrl
+
+@description('Web App FQDN')
+output webAppFqdn string = webApp.outputs.fqdn

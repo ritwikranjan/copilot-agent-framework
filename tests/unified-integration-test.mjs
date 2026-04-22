@@ -1,7 +1,11 @@
 /**
- * Integration Test for Unified Teams Copilot Agent
+ * Integration Test for Copilot Agent Framework — 4-service topology
  * 
- * Tests the teams-copilot-agent service running locally via docker-compose.
+ * Tests all 4 services running locally via docker-compose:
+ * - CLI Server (TCP:3000)
+ * - API Service (HTTP:4000, internal)
+ * - Teams Bot (HTTP:3978, external)
+ * - Web App (HTTP:3001, external)
  * 
  * Usage:
  *   docker-compose -f docker-compose.unified.yml up -d
@@ -9,13 +13,18 @@
  */
 
 const BOT_URL = process.env.BOT_URL || 'http://localhost:3978';
+const API_URL = process.env.API_URL || 'http://localhost:4000';
+const WEB_URL = process.env.WEB_URL || 'http://localhost:3001';
 const CLI_URL = process.env.CLI_URL || 'http://localhost:3000';
 
 console.log('========================================');
-console.log('Teams Copilot Agent - Integration Test');
+console.log('Copilot Agent Framework - Integration Test');
+console.log('4-service topology');
 console.log('========================================');
-console.log(`Bot URL: ${BOT_URL}`);
-console.log(`CLI URL: ${CLI_URL}`);
+console.log(`CLI URL:  ${CLI_URL}`);
+console.log(`API URL:  ${API_URL}`);
+console.log(`Bot URL:  ${BOT_URL}`);
+console.log(`Web URL:  ${WEB_URL}`);
 console.log('');
 
 let passed = 0;
@@ -136,14 +145,88 @@ async function testBotFrameworkMessage() {
 
 // Test 6: Check that Copilot service is configured
 async function testCopilotServiceConfig() {
-    // We can verify this by checking the Docker logs or by attempting a message
-    // For now, just verify the service is responding
     const response = await fetch(`${BOT_URL}/`);
     const data = await response.json();
-    
-    // The root endpoint should return app manifest info
     if (!data.name && !data.bots) {
         throw new Error('Service not returning expected metadata');
+    }
+}
+
+// ============ New 4-Service Topology Tests ============
+
+// Test 7: API Service Health Check
+async function testApiServiceHealth() {
+    const response = await fetch(`${API_URL}/api/health`);
+    if (!response.ok) {
+        throw new Error(`API health returned ${response.status}`);
+    }
+    const data = await response.json();
+    if (data.status !== 'ok') {
+        throw new Error(`API health status: ${data.status}`);
+    }
+}
+
+// Test 8: API Service Config
+async function testApiServiceConfig() {
+    const response = await fetch(`${API_URL}/api/config`);
+    if (!response.ok) {
+        throw new Error(`API config returned ${response.status}`);
+    }
+    const data = await response.json();
+    if (!data.model || !data.agentName) {
+        throw new Error('API config missing model or agentName');
+    }
+    console.log(`\n    Model: ${data.model}, Agent: ${data.agentName}`);
+}
+
+// Test 9: API Chat endpoint accepts requests
+async function testApiChatEndpoint() {
+    const response = await fetch(`${API_URL}/api/chat`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+            message: 'Hi from integration test',
+            userInfo: { username: 'integration-user', hostname: 'test' },
+            conversationId: 'integration-test-conv',
+        }),
+    });
+    if (response.status !== 200) {
+        throw new Error(`API chat returned ${response.status}`);
+    }
+    const contentType = response.headers.get('content-type');
+    if (!contentType || !contentType.includes('text/event-stream')) {
+        throw new Error(`Expected SSE content type, got: ${contentType}`);
+    }
+    // Consume the body to prevent socket hang
+    await response.text();
+}
+
+// Test 10: API Sessions endpoint
+async function testApiSessionsEndpoint() {
+    const response = await fetch(`${API_URL}/api/sessions?username=integration-user`);
+    if (!response.ok) {
+        throw new Error(`API sessions returned ${response.status}`);
+    }
+    const data = await response.json();
+    if (!Array.isArray(data.own)) {
+        throw new Error('Sessions response missing own array');
+    }
+    console.log(`\n    Sessions: ${data.own.length} own, ${data.shared.length} shared`);
+}
+
+// Test 11: Web App health (home page renders)
+async function testWebAppHealth() {
+    const response = await fetch(WEB_URL);
+    if (!response.ok) {
+        throw new Error(`Web app returned ${response.status}`);
+    }
+}
+
+// Test 12: Web App auth rejection (no token)
+async function testWebAppAuthRejection() {
+    const response = await fetch(`${WEB_URL}/api/sessions`);
+    if (response.status !== 401) {
+        throw new Error(`Expected 401, got ${response.status}`);
     }
 }
 
@@ -152,12 +235,25 @@ async function runTests() {
     console.log('Starting integration tests...');
     console.log('');
 
+    console.log('--- Legacy Tests (Teams Bot) ---');
     await test('CLI Server Health', testCliServerHealth);
     await test('Bot Root Endpoint', testBotRoot);
     await test('DevTools Available', testDevToolsAvailable);
     await test('Messages Endpoint Exists', testMessagesEndpoint);
     await test('Bot Framework Message', testBotFrameworkMessage);
     await test('Copilot Service Config', testCopilotServiceConfig);
+
+    console.log('');
+    console.log('--- API Service Tests ---');
+    await test('API Service Health', testApiServiceHealth);
+    await test('API Service Config', testApiServiceConfig);
+    await test('API Chat Endpoint (SSE)', testApiChatEndpoint);
+    await test('API Sessions Endpoint', testApiSessionsEndpoint);
+
+    console.log('');
+    console.log('--- Web App Tests ---');
+    await test('Web App Health', testWebAppHealth);
+    await test('Web App Auth Rejection', testWebAppAuthRejection);
 
     console.log('');
     console.log('========================================');

@@ -1,6 +1,6 @@
-# Deploy Unified Teams Copilot Agent
+# Deploy Copilot Agent Framework
+# 4-service architecture: CLI Server, API Service, Teams Bot, Web App
 # Builds Docker images, pushes to ACR, and deploys infrastructure with Bicep
-# Includes Azure Bot Service registration and generates Teams App manifest
 
 param(
     [Parameter(Mandatory=$true)]
@@ -22,7 +22,7 @@ param(
     [string]$AcrResourceGroup = "",
     
     [Parameter(Mandatory=$false)]
-    [string]$Model = "gpt-4.1",
+    [string]$Model = "gpt-5.2",
     
     [Parameter(Mandatory=$false)]
     [bool]$CreateBotService = $true,
@@ -31,13 +31,22 @@ param(
     [string]$CliImageTag = "latest",
     
     [Parameter(Mandatory=$false)]
+    [string]$ApiImageTag = "latest",
+    
+    [Parameter(Mandatory=$false)]
     [string]$AgentImageTag = "latest",
     
     [Parameter(Mandatory=$false)]
-    [string]$AgentName = "teams-copilot-agent",
+    [string]$WebImageTag = "latest",
+    
+    [Parameter(Mandatory=$false)]
+    [string]$AgentName = "copilot-api",
     
     [Parameter(Mandatory=$false)]
     [string]$AgentDescription = "An AI assistant powered by GitHub Copilot",
+    
+    [Parameter(Mandatory=$false)]
+    [string]$EntraClientId = "",
     
     [Parameter(Mandatory=$false)]
     [switch]$SkipBuild,
@@ -60,14 +69,15 @@ if ([string]::IsNullOrEmpty($AcrResourceGroup)) {
 }
 
 Write-Host "========================================" -ForegroundColor Cyan
-Write-Host "Deploying Unified Teams Copilot Agent" -ForegroundColor Cyan
+Write-Host "Deploying Copilot Agent Framework" -ForegroundColor Cyan
+Write-Host "4-service architecture" -ForegroundColor Cyan
 Write-Host "========================================" -ForegroundColor Cyan
 Write-Host "Resource Group: $ResourceGroup"
 Write-Host "ACR: $AcrName (in $AcrResourceGroup)"
 Write-Host "Base Name: $BaseName"
 Write-Host "Location: $Location"
 Write-Host "Model: $Model"
-Write-Host "Audit: Enabled (Cosmos DB)"
+Write-Host "Services: CLI Server, API Service, Teams Bot, Web App"
 Write-Host "Create Bot Service: $CreateBotService"
 if ($AgentProfile) {
     Write-Host "Agent Profile: $AgentProfile"
@@ -131,6 +141,38 @@ if (-not $SkipBuild) {
         exit 1
     }
     Write-Host "Teams Copilot Agent image pushed: $agentImage" -ForegroundColor Green
+
+    # Build and push API Service image
+    Write-Host "`nBuilding API Service image..." -ForegroundColor Yellow
+    $apiImage = "$AcrLoginServer/copilot-api-service:$ApiImageTag"
+    docker build -t $apiImage -f services/api/Dockerfile .
+    if ($LASTEXITCODE -ne 0) {
+        Write-Error "Failed to build API Service image"
+        exit 1
+    }
+    Write-Host "Pushing API Service image..." -ForegroundColor Yellow
+    docker push $apiImage
+    if ($LASTEXITCODE -ne 0) {
+        Write-Error "Failed to push API Service image"
+        exit 1
+    }
+    Write-Host "API Service image pushed: $apiImage" -ForegroundColor Green
+
+    # Build and push Web App image
+    Write-Host "`nBuilding Web App image..." -ForegroundColor Yellow
+    $webImage = "$AcrLoginServer/copilot-web-app:$WebImageTag"
+    docker build -t $webImage -f services/web-app/Dockerfile services/web-app
+    if ($LASTEXITCODE -ne 0) {
+        Write-Error "Failed to build Web App image"
+        exit 1
+    }
+    Write-Host "Pushing Web App image..." -ForegroundColor Yellow
+    docker push $webImage
+    if ($LASTEXITCODE -ne 0) {
+        Write-Error "Failed to push Web App image"
+        exit 1
+    }
+    Write-Host "Web App image pushed: $webImage" -ForegroundColor Green
 }
 
 $outputs = $null
@@ -149,7 +191,9 @@ if (-not $SkipInfra) {
     Write-Host "This will create:" -ForegroundColor Yellow
     Write-Host "  - VNet and Container Apps Environment" -ForegroundColor Yellow
     Write-Host "  - CLI Server Container App" -ForegroundColor Yellow
+    Write-Host "  - API Service Container App (internal)" -ForegroundColor Yellow
     Write-Host "  - Teams Copilot Agent Container App" -ForegroundColor Yellow
+    Write-Host "  - Web App Container App" -ForegroundColor Yellow
     Write-Host "  - Cosmos DB for audit logging" -ForegroundColor Yellow
     if ($CreateBotService) {
         Write-Host "  - Azure Bot Service registration" -ForegroundColor Yellow
@@ -164,8 +208,12 @@ if (-not $SkipInfra) {
         --parameters acrResourceGroup=$AcrResourceGroup `
         --parameters githubToken=$GithubToken `
         --parameters cliImageTag=$CliImageTag `
+        --parameters apiImageTag=$ApiImageTag `
         --parameters agentImageTag=$AgentImageTag `
+        --parameters webImageTag=$WebImageTag `
         --parameters model=$Model `
+        --parameters agentName=$AgentName `
+        --parameters entraClientId=$EntraClientId `
         --parameters createBotService=$CreateBotService `
         --parameters location=$Location `
         --query properties.outputs `
@@ -184,7 +232,9 @@ if (-not $SkipInfra) {
     Write-Host "========================================" -ForegroundColor Green
     Write-Host ""
     Write-Host "CLI Server URL: $($outputs.cliUrl.value)" -ForegroundColor White
+    Write-Host "API Service URL: $($outputs.apiInternalUrl.value)" -ForegroundColor White
     Write-Host "Teams Bot URL: $($outputs.agentBotUrl.value)" -ForegroundColor White
+    Write-Host "Web App URL: $($outputs.webAppUrl.value)" -ForegroundColor White
     Write-Host "Bot Messaging Endpoint: $($outputs.agentMessagingEndpoint.value)" -ForegroundColor White
     Write-Host "Health Check URL: $($outputs.agentHealthUrl.value)" -ForegroundColor White
     Write-Host "Bot ID (Managed Identity): $($outputs.botId.value)" -ForegroundColor White

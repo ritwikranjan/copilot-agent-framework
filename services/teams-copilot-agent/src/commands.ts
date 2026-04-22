@@ -10,6 +10,7 @@ export const COMMANDS = {
     END_SESSION: ['/end-session', '/end', '/bye'],
     RESUME: ['/resume', '/continue'],
     STATUS: ['/status', '/session'],
+    SHOW_KUSTO_QUERIES: ['/show_kusto_queries', '/queries', '/kql'],
     HELP: ['/help', '/?']
 } as const;
 
@@ -54,6 +55,7 @@ export function getHelpText(): string {
     return (
         '**Available Commands:**\n\n' +
         '• `/status` - Check your current session status\n' +
+        '• `/queries` - Show KQL queries executed in this session\n' +
         '• `/new-session` - Start a fresh conversation (ends current session)\n' +
         '• `/end-session` - End your current session\n' +
         '• `/resume` - Resume after session expiration\n' +

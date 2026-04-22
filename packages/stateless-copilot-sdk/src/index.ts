@@ -19,10 +19,12 @@ export type {
 export {
     SessionStatus,
     ToolExecutionStatus,
+    ShareRole,
     SESSION_EXPIRATION_MS,
     createSessionInfo,
     createInteraction,
     createToolExecution,
+    createSessionShare,
     getSessionPartitionKey,
     getInteractionPartitionKey,
     getToolExecutionPartitionKey,
@@ -38,6 +40,11 @@ export type {
     ToolsConfig,
     MCPServerConfig,
     IStreamHandler,
+    ProcessMessageContext,
+    ProcessMessageOptions,
+    HandleEventFn,
+    AuditContext,
+    SessionShare,
 } from './models.js';
 
 // ============ Interfaces ============
@@ -70,6 +77,7 @@ export type { AuditManagerOptions } from './audit-manager.js';
 // ============ Copilot Service ============
 export {
     CopilotService,
+    defaultStreamingHandler,
     loadSystemPrompt,
     loadToolsConfig,
     buildMcpServersConfig,

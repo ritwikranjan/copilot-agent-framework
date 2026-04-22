@@ -23,7 +23,11 @@ import type {
     CopilotResponse,
     MCPServerConfig,
     ToolsConfig,
-    IStreamHandler
+    IStreamHandler,
+    ProcessMessageContext,
+    ProcessMessageOptions,
+    HandleEventFn,
+    AuditContext,
 } from './models.js';
 import { SessionManager, SessionNotFoundError, SessionExpiredError, formatRemainingTime } from './session-manager.js';
 import type { SessionStatusResult } from './session-manager.js';
@@ -196,6 +200,242 @@ export function buildMcpServersConfig(
     return Object.keys(mcpServers).length > 0 ? mcpServers : undefined;
 }
 
+// ============ Default Streaming Handler ============
+
+/**
+ * Create a HandleEventFn that implements the standard streaming event loop.
+ *
+ * This is the default handler used by `sendMessageStreaming()`. It subscribes
+ * to copilot session events, buffers content by turn, sends messages via the
+ * stream handler, and manages audit logging for tool executions.
+ *
+ * Use this when you want the standard streaming behavior but with the
+ * `processMessage()` API for custom session/audit integration.
+ *
+ * @param streamHandler - The stream handler to send events to (SSE, Teams, etc.)
+ * @param options - Optional configuration
+ * @returns A HandleEventFn that can be passed to `processMessage()`
+ */
+export function defaultStreamingHandler(
+    streamHandler: IStreamHandler,
+    options?: { showReasoning?: boolean }
+): HandleEventFn {
+    return async (ctx: ProcessMessageContext): Promise<CopilotResponse> => {
+        const { copilotSession, audit, logger, message, config } = ctx;
+        const pendingTools: Map<string, { auditToolId: string; toolName: string }> = new Map();
+        let responseContent = '';
+        let reasoningContent = '';
+        let hasContentInCurrentTurn = false;
+        let turnCount = 0;
+        let turnContentBuffer = '';
+        let unsubscribe: (() => void) | undefined;
+
+        // Start audit interaction
+        if (audit) {
+            await audit.startInteraction(message);
+        }
+
+        const STREAM_TIMEOUT = 600000; // 10 minutes
+        const FIRST_RESPONSE_TIMEOUT = 120000; // 120s
+        let timeoutId: ReturnType<typeof setTimeout> | undefined;
+        let firstResponseTimeoutId: ReturnType<typeof setTimeout> | undefined;
+        let receivedFirstEvent = false;
+        const pendingMessages: Promise<void>[] = [];
+
+        try {
+            await new Promise<void>((resolve, reject) => {
+                timeoutId = setTimeout(() => {
+                    logger.error('Streaming timed out after %d ms', STREAM_TIMEOUT);
+                    reject(new Error('Streaming timed out'));
+                }, STREAM_TIMEOUT);
+
+                firstResponseTimeoutId = setTimeout(() => {
+                    if (!receivedFirstEvent) {
+                        logger.error('No response from model within %d ms', FIRST_RESPONSE_TIMEOUT);
+                        if (timeoutId) clearTimeout(timeoutId);
+                        reject(new Error('Session context too large or model unresponsive. Try /new to start a fresh session.'));
+                    }
+                }, FIRST_RESPONSE_TIMEOUT);
+
+                unsubscribe = copilotSession.on((event: { type: string; data?: Record<string, unknown> }) => {
+                    try {
+                        if (!receivedFirstEvent) {
+                            const activeEvents = ['assistant.turn_start', 'assistant.reasoning_delta', 'assistant.message_delta', 'assistant.streaming_delta', 'assistant.reasoning', 'tool.execution_start', 'session.tools_updated'];
+                            if (activeEvents.includes(event.type)) {
+                                receivedFirstEvent = true;
+                                if (firstResponseTimeoutId) { clearTimeout(firstResponseTimeoutId); firstResponseTimeoutId = undefined; }
+                            }
+                        }
+
+                        logger.debug('Event: %s, data: %O', event.type, event.data);
+
+                        switch (event.type) {
+                            case 'assistant.turn_start':
+                                logger.debug('Turn start (turn %d)', turnCount);
+                                hasContentInCurrentTurn = false;
+                                turnContentBuffer = '';
+                                streamHandler.typing?.();
+                                break;
+
+                            case 'assistant.turn_end':
+                                logger.info('Turn end (turn %d, hasContent: %s, bufferLen: %d)', turnCount, hasContentInCurrentTurn, turnContentBuffer.length);
+                                if (turnContentBuffer.trim() && streamHandler.sendMessage) {
+                                    logger.info('Sending turn %d message (%d chars)', turnCount, turnContentBuffer.trim().length);
+                                    const p = streamHandler.sendMessage(turnContentBuffer.trim())
+                                        .then(() => logger.info('Turn %d message sent', turnCount))
+                                        .catch(err => logger.error('Failed to send turn %d: %O', turnCount, err));
+                                    pendingMessages.push(p);
+                                }
+                                turnCount++;
+                                break;
+
+                            case 'assistant.message_delta':
+                            case 'assistant.streaming_delta': {
+                                const deltaContent = (event.data?.deltaContent || event.data?.content) as string | undefined;
+                                if (deltaContent) {
+                                    responseContent += deltaContent;
+                                    turnContentBuffer += deltaContent;
+                                    hasContentInCurrentTurn = true;
+                                }
+                                break;
+                            }
+
+                            case 'assistant.message': {
+                                const content = event.data?.content as string | undefined;
+                                if (content && !turnContentBuffer.trim()) {
+                                    turnContentBuffer = content;
+                                    responseContent += content;
+                                    hasContentInCurrentTurn = true;
+                                }
+                                break;
+                            }
+
+                            case 'assistant.reasoning_delta': {
+                                const reasoningDelta = event.data?.deltaContent as string | undefined;
+                                if (reasoningDelta) {
+                                    reasoningContent += reasoningDelta;
+                                    streamHandler.update?.(`reasoning:${reasoningContent}`);
+                                }
+                                break;
+                            }
+
+                            case 'assistant.reasoning': {
+                                const reasoning = event.data?.content as string | undefined;
+                                if (reasoning && !reasoningContent) {
+                                    reasoningContent = reasoning;
+                                    streamHandler.update?.(`reasoning:${reasoningContent}`);
+                                }
+                                break;
+                            }
+
+                            case 'tool.execution_start': {
+                                const toolCallId = event.data?.toolCallId as string | undefined;
+                                const toolName = (event.data?.toolName || event.data?.name || 'unknown') as string;
+                                logger.info('Tool start: %s (toolCallId: %s)', toolName, toolCallId);
+                                streamHandler.typing?.();
+                                streamHandler.update?.(`🔧 Using tool: ${toolName}`);
+
+                                if (audit && toolCallId) {
+                                    audit.logToolStart(toolName, event.data?.arguments as Record<string, unknown>)
+                                        .then(auditToolId => pendingTools.set(toolCallId, { auditToolId, toolName }))
+                                        .catch(err => logger.error('Audit tool start error: %O', err));
+                                }
+                                break;
+                            }
+
+                            case 'tool.execution_progress': {
+                                const progressMessage = event.data?.progressMessage as string | undefined;
+                                if (progressMessage) {
+                                    streamHandler.update?.(`📋 ${progressMessage}`);
+                                }
+                                break;
+                            }
+
+                            case 'tool.execution_complete': {
+                                const toolCallId = event.data?.toolCallId as string | undefined;
+                                const pendingTool = toolCallId ? pendingTools.get(toolCallId) : undefined;
+                                logger.info('Tool complete: %s (success: %s)', pendingTool?.toolName || 'unknown', event.data?.success);
+
+                                if (audit && toolCallId && pendingTool) {
+                                    pendingTools.delete(toolCallId);
+                                    audit.logToolComplete(pendingTool.auditToolId, event.data?.result)
+                                        .catch(err => logger.error('Audit tool complete error: %O', err));
+                                }
+                                break;
+                            }
+
+                            case 'session.idle':
+                                logger.debug('Session idle — waiting for %d pending messages', pendingMessages.length);
+                                Promise.all(pendingMessages).then(() => {
+                                    streamHandler.close?.();
+                                    if (timeoutId) clearTimeout(timeoutId);
+                                    if (firstResponseTimeoutId) clearTimeout(firstResponseTimeoutId);
+                                    resolve();
+                                }).catch(err => {
+                                    logger.error('Error sending pending messages: %O', err);
+                                    streamHandler.close?.();
+                                    if (timeoutId) clearTimeout(timeoutId);
+                                    if (firstResponseTimeoutId) clearTimeout(firstResponseTimeoutId);
+                                    resolve();
+                                });
+                                break;
+
+                            case 'session.error': {
+                                const errorMessage = (event.data?.message || event.data?.error || 'Unknown session error') as string;
+                                logger.error('Session error: %s', errorMessage);
+                                if (timeoutId) clearTimeout(timeoutId);
+                                if (firstResponseTimeoutId) clearTimeout(firstResponseTimeoutId);
+                                reject(new Error(errorMessage));
+                                break;
+                            }
+                        }
+                    } catch (error) {
+                        logger.error('Event processing error: %O', error);
+                    }
+                });
+
+                copilotSession.send({ prompt: message }).catch((err) => {
+                    if (timeoutId) clearTimeout(timeoutId);
+                    reject(err);
+                });
+            });
+
+            // Complete audit
+            if (audit) {
+                await audit.completeInteraction(responseContent, reasoningContent || undefined);
+            }
+
+            return {
+                success: true,
+                response: responseContent,
+                model: config.model,
+                agent: config.agentName,
+                sessionId: ctx.session.id,
+                reasoning: reasoningContent || undefined,
+            };
+        } catch (error) {
+            logger.error('Streaming error: %O', error);
+            if (audit) {
+                await audit.completeInteraction(
+                    `[Error: ${(error as Error).message}]`,
+                    reasoningContent || undefined
+                );
+            }
+            return {
+                success: false,
+                error: (error as Error).message || 'Failed to process request',
+                model: config.model,
+                agent: config.agentName,
+                sessionId: ctx.session.id,
+            };
+        } finally {
+            if (unsubscribe) {
+                try { unsubscribe(); } catch { /* ignore */ }
+            }
+        }
+    };
+}
+
 // ============ CopilotService Class ============
 
 /**
@@ -295,6 +535,184 @@ export class CopilotService {
         });
 
         return result.session;
+    }
+
+    /**
+     * Process a message through the full lifecycle: session management,
+     * Copilot client creation/resume, audit, and delegate to user's handleEvent.
+     *
+     * This is the core pluggable API. The framework manages:
+     * - Session resolution (create or resume)
+     * - CopilotClient lifecycle (create, resume, cleanup)
+     * - Audit logging setup
+     *
+     * The user's `handleEvent` receives a `ProcessMessageContext` and is responsible
+     * for subscribing to events, processing the response, and returning a CopilotResponse.
+     *
+     * Use `defaultStreamingHandler()` for the standard streaming implementation,
+     * or provide your own for custom event processing.
+     */
+    async processMessage(options: ProcessMessageOptions): Promise<CopilotResponse> {
+        const { message, userInfo, handleEvent, conversationId, sessionId, sessionName } = options;
+        const effectiveConversationId = conversationId || 'unknown';
+
+        let session: SessionInfo | undefined;
+        const auditManager = this.auditEnabled ? this.auditManager : null;
+
+        // Check if session is expired
+        if (effectiveConversationId !== 'unknown') {
+            const sessionStatus = await this.sessionManager.getSessionStatus(userInfo.username, effectiveConversationId);
+            if (sessionStatus.exists && sessionStatus.expired) {
+                this.log.info('processMessage: session expired for conversation %s', effectiveConversationId);
+                await this.sessionManager.endSessionByConversationId(userInfo.username, effectiveConversationId);
+
+                return {
+                    success: false,
+                    error: 'Your session has expired. Please send `/resume` to start a new session and continue, or `/new-session` to start fresh.',
+                    model: this.config.model,
+                    agent: this.config.agentName,
+                    sessionExpired: true
+                };
+            }
+        }
+
+        // Resolve session
+        try {
+            const result = await this.sessionManager.resolveSession(userInfo, {
+                sessionId,
+                sessionName,
+                conversationId: effectiveConversationId,
+                agentConfig: { model: this.config.model, agent: this.config.agentName }
+            });
+            session = result.session;
+            this.log.info('processMessage: session resolved (id=%s, isNew=%s)', session.id, result.isNew);
+        } catch (error) {
+            if (error instanceof SessionNotFoundError || error instanceof SessionExpiredError) {
+                this.log.error('processMessage: session resolution failed: %O', error);
+                return {
+                    success: false,
+                    error: error.message,
+                    model: this.config.model,
+                    agent: this.config.agentName,
+                    sessionExpired: error instanceof SessionExpiredError
+                };
+            }
+            this.log.error('processMessage: session resolution failed: %O', error);
+            throw error;
+        }
+
+        // Create Copilot client and session
+        let copilotClient: CopilotClient | undefined;
+        let copilotSession: Awaited<ReturnType<CopilotClient['createSession']>> | undefined;
+
+        try {
+            copilotClient = new CopilotClient({ cliUrl: this.config.cliUrl });
+
+            const sessionConfig: Record<string, unknown> = {
+                model: this.config.model,
+                systemMessage: {
+                    mode: 'replace',
+                    content: this.config.systemPrompt
+                },
+                streaming: true,
+                onPermissionRequest: async (request: { kind: string; toolCallId?: string; [key: string]: unknown }) => {
+                    this.log.debug('processMessage: permission request: %O', request);
+                    return { kind: 'approved' as const };
+                }
+            };
+
+            if (this.config.mcpServers) {
+                sessionConfig.mcpServers = this.config.mcpServers;
+            }
+
+            // Try to resume existing Copilot session, or create new
+            if (session.copilot_session_id) {
+                try {
+                    this.log.info('processMessage: resuming copilot session %s', session.copilot_session_id);
+                    copilotSession = await copilotClient.resumeSession(session.copilot_session_id, sessionConfig as any);
+                    this.log.info('processMessage: copilot session resumed');
+                } catch (resumeError) {
+                    this.log.warn('processMessage: resume failed, creating new: %O', resumeError);
+                }
+            }
+
+            if (!copilotSession) {
+                this.log.info('processMessage: creating new copilot session');
+                copilotSession = await copilotClient.createSession(sessionConfig as any);
+                if (!copilotSession) {
+                    throw new Error('Failed to create Copilot session');
+                }
+                // Store the Copilot session ID for future resume
+                const copilotSessionId = copilotSession.sessionId;
+                this.log.info('processMessage: copilot session created (id=%s)', copilotSessionId);
+                await this.sessionManager.updateCopilotSessionId(
+                    userInfo.username,
+                    session.id,
+                    copilotSessionId
+                );
+            }
+
+            // Touch session to update last activity
+            await this.sessionManager.touchSession(userInfo.username, session.id);
+
+            // Build audit context
+            let auditContext: AuditContext | null = null;
+            if (auditManager && session) {
+                auditManager.setSession(session.id);
+                auditContext = {
+                    startInteraction: (userQuery: string) => auditManager.startInteraction(userQuery),
+                    completeInteraction: async (response?: string, reasoning?: string) => {
+                        await auditManager.completeInteraction(response, reasoning);
+                    },
+                    logToolStart: (toolName: string, args?: Record<string, unknown>) =>
+                        auditManager.logToolStart(toolName, args),
+                    logToolComplete: (auditToolId: string, result?: unknown) =>
+                        auditManager.logToolComplete(auditToolId, result),
+                    logToolError: async (auditToolId: string, errorMsg: string) => {
+                        await auditManager.logToolError(auditToolId, errorMsg);
+                    },
+                };
+            }
+
+            // Build the context for the user's handler
+            this.log.debug('processMessage: building context');
+            const ctx: ProcessMessageContext = {
+                session,
+                copilotSession: copilotSession as ProcessMessageContext['copilotSession'],
+                audit: auditContext,
+                logger: this.log,
+                message,
+                userInfo,
+                config: {
+                    model: this.config.model,
+                    agentName: this.config.agentName,
+                },
+            };
+
+            // Delegate to user's event handler
+            const response = await handleEvent(ctx);
+            this.log.info('processMessage: handleEvent completed (success=%s)', response.success);
+            return response;
+
+        } catch (error) {
+            this.log.error('processMessage: handleEvent error: %O', error);
+            return {
+                success: false,
+                error: (error as Error).message || 'Failed to process message',
+                model: this.config.model,
+                agent: this.config.agentName,
+                sessionId: session?.id
+            };
+        } finally {
+            this.log.debug('processMessage: cleaning up copilot client');
+            if (copilotClient) {
+                try {
+                    await copilotClient.stop();
+                } catch (cleanupError) {
+                    this.log.debug('processMessage: cleanup error (suppressed): %O', cleanupError);
+                }
+            }
+        }
     }
 
     /**
@@ -427,12 +845,9 @@ export class CopilotService {
     /**
      * Send a message to Copilot with streaming response.
      *
-     * STATELESS SESSION MANAGEMENT:
-     * - Sessions are persisted via SessionManager, enabling horizontal scaling
-     * - Copilot SDK session IDs are stored for cross-container resume capability
-     * - First message creates a new session (valid for 12 hours)
-     * - Subsequent messages resume the session using stored Copilot session ID
-     * - Sessions expire after 12 hours from creation
+     * Delegates to `processMessage()` with `defaultStreamingHandler()`.
+     * This is the high-level API for streaming — use `processMessage()` directly
+     * if you need custom event handling.
      *
      * @param message - The user message to send
      * @param userInfo - User information for audit logging
@@ -445,409 +860,28 @@ export class CopilotService {
         streamHandler: IStreamHandler,
         options?: SendMessageOptions
     ): Promise<CopilotResponse> {
-        const conversationId = options?.conversationId || 'unknown';
+        const response = await this.processMessage({
+            message,
+            userInfo,
+            handleEvent: defaultStreamingHandler(streamHandler, {
+                showReasoning: options?.showReasoning,
+            }),
+            conversationId: options?.conversationId,
+            sessionId: options?.sessionId,
+            sessionName: options?.sessionName,
+        });
 
-        let session: SessionInfo | undefined;
-        const auditManager = this.auditEnabled ? this.auditManager : null;
-        // Map toolCallId -> { auditToolId, toolName } for tracking tool lifecycle
-        const pendingTools: Map<string, { auditToolId: string; toolName: string }> = new Map();
-        let responseContent = '';  // Full accumulated content for audit
-        let reasoningContent = '';
-        let hasContentInCurrentTurn = false;
-        let turnCount = 0;           // Track which turn we're on (0 = first, streamed; 1+ = separate messages)
-        let turnContentBuffer = '';   // Buffer for subsequent turns' content
-
-        // Check if session is expired
-        const sessionStatus = await this.sessionManager.getSessionStatus(userInfo.username, conversationId);
-        if (sessionStatus.exists && sessionStatus.expired) {
-            this.log.info('Session expired for conversation %s', conversationId);
-            // End the expired session
-            await this.sessionManager.endSessionByConversationId(userInfo.username, conversationId);
-
-            return {
-                success: false,
-                error: 'Your session has expired. Please send `/resume` to start a new session and continue, or `/new-session` to start fresh.',
-                model: this.config.model,
-                agent: this.config.agentName,
-                sessionExpired: true
-            };
-        }
-
-        // Resolve session (will create new or return existing)
-        try {
-            const result = await this.sessionManager.resolveSession(userInfo, {
-                sessionId: options?.sessionId,
-                sessionName: options?.sessionName,
-                conversationId,
-                agentConfig: { model: this.config.model, agent: this.config.agentName }
-            });
-            session = result.session;
-
-            this.log.info('Resolved session: %s, isNew: %s, hasCopilotSessionId: %s', session.id, result.isNew, !!session.copilot_session_id);
-        } catch (error) {
-            if (error instanceof SessionNotFoundError || error instanceof SessionExpiredError) {
-                this.log.error('Session error: %s', error.message);
-                return {
-                    success: false,
-                    error: error.message,
-                    model: this.config.model,
-                    agent: this.config.agentName,
-                    sessionExpired: error instanceof SessionExpiredError
-                };
-            }
-            this.log.error('Session resolution error: %O', error);
-            throw error;
-        }
-
-        // Create Copilot client and session
-        let copilotClient: CopilotClient | undefined;
-        let copilotSession: Awaited<ReturnType<CopilotClient['createSession']>> | undefined;
-        let unsubscribe: (() => void) | undefined;
-
-        try {
-            copilotClient = new CopilotClient({ cliUrl: this.config.cliUrl });
-
-            // Build session config
-            const sessionConfig: Record<string, unknown> = {
-                model: this.config.model,
-                systemMessage: {
-                    mode: 'replace',
-                    content: this.config.systemPrompt
-                },
-                streaming: true,
-                onPermissionRequest: async (request: { kind: string; toolCallId?: string; [key: string]: unknown }) => {
-                    this.log.debug('Permission request: %O', request);
-                    return { kind: 'approved' as const };
-                }
-            };
-
-            // Add MCP servers if configured
-            if (this.config.mcpServers) {
-                sessionConfig.mcpServers = this.config.mcpServers;
-                this.log.debug('MCP servers: %O', this.config.mcpServers);
-            }
-
-            // Try to resume existing Copilot session, or create new
-            if (session?.copilot_session_id) {
-                try {
-                    this.log.info('Attempting to resume Copilot session: %s', session.copilot_session_id);
-                    copilotSession = await copilotClient.resumeSession(session.copilot_session_id, sessionConfig as any);
-                    this.log.info('Successfully resumed Copilot session: %s', session.copilot_session_id);
-                } catch (resumeError) {
-                    this.log.warn('Failed to resume Copilot session, creating new: %O', resumeError);
-                }
-            }
-
-            // Create new session if resume failed or no existing session
-            if (!copilotSession) {
-                this.log.info('Creating new Copilot session for conversation %s', conversationId);
-                copilotSession = await copilotClient.createSession(sessionConfig as any);
-
-                if (!copilotSession) {
-                    throw new Error('Failed to create Copilot session');
-                }
-
-                // Store the Copilot session ID for future resume
-                if (session) {
-                    const copilotSessionId = copilotSession.sessionId;
-                    this.log.info('Storing Copilot session ID: %s', copilotSessionId);
-                    await this.sessionManager.updateCopilotSessionId(
-                        userInfo.username,
-                        session.id,
-                        copilotSessionId
-                    );
-                }
-            }
-
-            // Touch session to update last activity
-            if (session) {
-                await this.sessionManager.touchSession(userInfo.username, session.id);
-            }
-
-            // Set up audit
-            if (auditManager && session) {
-                auditManager.setSession(session.id);
-                await auditManager.startInteraction(message);
-            }
-
-            // Set up event handlers for streaming
-            const STREAM_TIMEOUT = 600000; // 10 minutes
-            const FIRST_RESPONSE_TIMEOUT = 120000; // 120s to get first event from model
-            let timeoutId: ReturnType<typeof setTimeout> | undefined;
-            let firstResponseTimeoutId: ReturnType<typeof setTimeout> | undefined;
-            let receivedFirstEvent = false;
-            const pendingMessages: Promise<void>[] = []; // Track sendMessage promises
-
-            // Reasoning buffer: accumulate deltas and show last full sentence
-            let reasoningBuffer = '';
-            let lastReasoningUpdate = 0;
-            const REASONING_UPDATE_INTERVAL = 1500; // ms between status updates
-
-            await new Promise<void>((resolve, reject) => {
-                timeoutId = setTimeout(() => {
-                    this.log.error('Streaming timed out after %d ms', STREAM_TIMEOUT);
-                    reject(new Error('Streaming timed out'));
-                }, STREAM_TIMEOUT);
-
-                // First response timeout — if model doesn't start within 60s, fail fast
-                firstResponseTimeoutId = setTimeout(() => {
-                    if (!receivedFirstEvent) {
-                        this.log.error('No response from model within %d ms — session may be too large', FIRST_RESPONSE_TIMEOUT);
-                        if (timeoutId) clearTimeout(timeoutId);
-                        reject(new Error('Session context too large or model unresponsive. Try /new to start a fresh session.'));
-                    }
-                }, FIRST_RESPONSE_TIMEOUT);
-
-                unsubscribe = copilotSession!.on((event: { type: string; data?: Record<string, unknown> }) => {
-                    try {
-                        // Clear first-response timeout on any model activity event
-                        if (!receivedFirstEvent) {
-                            const activeEvents = ['assistant.turn_start', 'assistant.reasoning_delta', 'assistant.message_delta', 'assistant.streaming_delta', 'assistant.reasoning', 'tool.execution_start', 'session.tools_updated'];
-                            if (activeEvents.includes(event.type)) {
-                                receivedFirstEvent = true;
-                                if (firstResponseTimeoutId) { clearTimeout(firstResponseTimeoutId); firstResponseTimeoutId = undefined; }
-                            }
-                        }
-
-                        this.log.debug('Event: %s, data: %O', event.type, event.data);
-
-                        switch (event.type) {
-                            case 'assistant.turn_start':
-                                this.log.debug('Turn start (turn %d)', turnCount);
-                                hasContentInCurrentTurn = false;
-                                turnContentBuffer = '';
-                                // Send typing indicator at start of every turn
-                                streamHandler.typing?.();
-                                break;
-
-                            case 'assistant.turn_end':
-                                this.log.info('Turn end (turn %d, hasContent: %s, bufferLen: %d)', turnCount, hasContentInCurrentTurn, turnContentBuffer.length);
-                                // Send buffered content as a separate message
-                                if (turnContentBuffer.trim() && streamHandler.sendMessage) {
-                                    this.log.info('Sending turn %d message (%d chars)', turnCount, turnContentBuffer.trim().length);
-                                    const p = streamHandler.sendMessage(turnContentBuffer.trim())
-                                        .then(() => this.log.info('Turn %d message sent successfully', turnCount))
-                                        .catch(err => this.log.error('Failed to send turn %d message: %O', turnCount, err));
-                                    pendingMessages.push(p);
-                                } else {
-                                    this.log.info('Turn %d: no content to send (buffer empty or no sendMessage handler)', turnCount);
-                                }
-                                turnCount++;
-                                break;
-
-                            case 'assistant.message_delta':
-                            case 'assistant.streaming_delta': {
-                                // Buffer all content — sent as separate message on turn_end
-                                const deltaContent = (event.data?.deltaContent || event.data?.content) as string | undefined;
-                                if (deltaContent) {
-                                    this.log.debug('Delta: %s', deltaContent);
-                                    responseContent += deltaContent;
-                                    turnContentBuffer += deltaContent;
-                                    hasContentInCurrentTurn = true;
-                                } else {
-                                    this.log.debug('No deltaContent in event data');
-                                }
-                                break;
-                            }
-
-                            case 'assistant.message': {
-                                // Complete message for this turn — this is the primary content source
-                                // (streaming_delta only carries progress metadata, not actual text)
-                                const content = event.data?.content as string | undefined;
-                                if (content) {
-                                    this.log.info('Final message (%d chars): %s...', content.length, content.substring(0, 100));
-                                    // Use this as turn content if deltas didn't provide it
-                                    if (!turnContentBuffer.trim()) {
-                                        turnContentBuffer = content;
-                                        responseContent += content;
-                                        hasContentInCurrentTurn = true;
-                                    }
-                                }
-                                break;
-                            }
-
-                            case 'assistant.reasoning_delta': {
-                                // Reasoning delta - buffer and show throttled status updates
-                                const reasoningDelta = event.data?.deltaContent as string | undefined;
-                                if (reasoningDelta) {
-                                    this.log.debug('Reasoning delta: %s', reasoningDelta);
-                                    reasoningContent += reasoningDelta;
-                                    reasoningBuffer += reasoningDelta;
-
-                                    const now = Date.now();
-                                    if (now - lastReasoningUpdate >= REASONING_UPDATE_INTERVAL) {
-                                        // Extract last sentence or meaningful chunk
-                                        const sentences = reasoningBuffer.split(/[.!?\n]/).filter(s => s.trim().length > 10);
-                                        const display = sentences.length > 0
-                                            ? sentences[sentences.length - 1].trim().substring(0, 100)
-                                            : reasoningBuffer.trim().substring(reasoningBuffer.length - 100).trim();
-                                        if (display) {
-                                            streamHandler.update?.(`💭 ${display}...`);
-                                        }
-                                        lastReasoningUpdate = now;
-                                        reasoningBuffer = '';
-                                    }
-                                }
-                                break;
-                            }
-
-                            case 'assistant.reasoning': {
-                                // Final complete reasoning - always sent regardless of streaming
-                                const reasoning = event.data?.content as string | undefined;
-                                if (reasoning) {
-                                    this.log.debug('Final reasoning: %s...', reasoning.substring(0, 100));
-                                    if (!reasoningContent) {
-                                        reasoningContent = reasoning;
-                                    }
-                                }
-                                break;
-                            }
-
-                            case 'tool.execution_start': {
-                                const toolCallId = event.data?.toolCallId as string | undefined;
-                                const toolName = (event.data?.toolName || event.data?.name || 'unknown') as string;
-                                this.log.info('Tool start: %s (toolCallId: %s)', toolName, toolCallId);
-
-                                // Show typing indicator during tool execution
-                                streamHandler.typing?.();
-                                streamHandler.update?.(`🔧 Using tool: ${toolName}`);
-
-                                // Log tool start to audit using toolCallId as key
-                                if (auditManager && toolCallId) {
-                                    auditManager.logToolStart(toolName, event.data?.arguments as Record<string, unknown>)
-                                        .then(auditToolId => pendingTools.set(toolCallId, { auditToolId, toolName }))
-                                        .catch(err => this.log.error('Audit tool start error: %O', err));
-                                }
-                                break;
-                            }
-
-                            case 'tool.execution_progress': {
-                                // Tool execution progress - show as status update
-                                const progressMessage = event.data?.progressMessage as string | undefined;
-                                if (progressMessage) {
-                                    this.log.debug('Tool progress: %s', progressMessage);
-                                    streamHandler.update?.(`📋 ${progressMessage}`);
-                                }
-                                break;
-                            }
-
-                            case 'tool.execution_complete': {
-                                const toolCallId = event.data?.toolCallId as string | undefined;
-                                const pendingTool = toolCallId ? pendingTools.get(toolCallId) : undefined;
-                                const toolName = pendingTool?.toolName || 'unknown';
-                                const success = event.data?.success as boolean | undefined;
-                                this.log.info('Tool complete: %s (toolCallId: %s, success: %s)', toolName, toolCallId, success);
-
-                                // Log tool complete to audit
-                                if (auditManager && toolCallId && pendingTool) {
-                                    pendingTools.delete(toolCallId);
-                                    auditManager.logToolComplete(pendingTool.auditToolId, event.data?.result)
-                                        .catch(err => this.log.error('Audit tool complete error: %O', err));
-                                }
-                                break;
-                            }
-
-                            case 'session.idle':
-                                this.log.debug('Session idle — waiting for %d pending messages', pendingMessages.length);
-                                // Wait for all pending sendMessage calls to complete before closing
-                                Promise.all(pendingMessages).then(() => {
-                                    this.log.debug('All pending messages sent — closing stream');
-                                    streamHandler.close?.();
-                                    if (timeoutId) clearTimeout(timeoutId);
-                                    if (firstResponseTimeoutId) clearTimeout(firstResponseTimeoutId);
-                                    resolve();
-                                }).catch(err => {
-                                    this.log.error('Error sending pending messages: %O', err);
-                                    streamHandler.close?.();
-                                    if (timeoutId) clearTimeout(timeoutId);
-                                    if (firstResponseTimeoutId) clearTimeout(firstResponseTimeoutId);
-                                    resolve(); // still resolve, messages were best-effort
-                                });
-                                break;
-
-                            case 'session.error': {
-                                const errorMessage = (event.data?.message || event.data?.error || 'Unknown session error') as string;
-                                this.log.error('Session error: %s', errorMessage);
-                                if (timeoutId) clearTimeout(timeoutId);
-                                if (firstResponseTimeoutId) clearTimeout(firstResponseTimeoutId);
-                                reject(new Error(errorMessage));
-                                break;
-                            }
-
-                            default:
-                                this.log.debug('Unknown event type: %s', event.type);
-                                break;
-                        }
-                    } catch (error) {
-                        this.log.error('Event processing error: %O', error);
-                    }
-                });
-
-                // Use session.send() for streaming (not sendAndWait which blocks)
-                // The session.idle event will signal completion
-                copilotSession!.send({ prompt: message }).catch((err) => {
-                    if (timeoutId) clearTimeout(timeoutId);
-                    reject(err);
-                });
-            });
-
-            // Complete audit interaction
-            if (auditManager) {
-                await auditManager.completeInteraction(responseContent, reasoningContent || undefined);
-            }
-
-            // Get remaining session time
-            const updatedStatus = await this.sessionManager.getSessionStatus(userInfo.username, conversationId);
-            const remainingTime = updatedStatus.remainingTimeMs
-                ? formatRemainingTime(updatedStatus.remainingTimeMs)
-                : undefined;
-
-            return {
-                success: true,
-                response: responseContent,
-                model: this.config.model,
-                agent: this.config.agentName,
-                sessionId: session?.id,
-                reasoning: reasoningContent || undefined,
-                remainingSessionTime: remainingTime
-            };
-
-        } catch (error) {
-            this.log.error('Streaming error: %O', error);
-
-            // Log error to audit
-            if (auditManager) {
-                await auditManager.completeInteraction(
-                    `[Error: ${(error as Error).message}]`,
-                    reasoningContent || undefined
-                );
-            }
-
-            return {
-                success: false,
-                error: (error as Error).message || 'Failed to process request',
-                model: this.config.model,
-                agent: this.config.agentName,
-                sessionId: session?.id
-            };
-        } finally {
-            if (unsubscribe) {
-                try {
-                    unsubscribe();
-                } catch {
-                    // Ignore unsubscribe errors
-                }
-            }
-
-            // Clean up Copilot client - we create a new one for each request
-            // The session ID is persisted for stateless resume
-            if (copilotClient) {
-                try {
-                    await copilotClient.stop();
-                } catch {
-                    // Ignore cleanup errors
-                }
+        // Enrich with remaining session time if successful
+        if (response.success && options?.conversationId) {
+            const updatedStatus = await this.sessionManager.getSessionStatus(
+                userInfo.username,
+                options.conversationId
+            );
+            if (updatedStatus.remainingTimeMs) {
+                response.remainingSessionTime = formatRemainingTime(updatedStatus.remainingTimeMs);
             }
         }
+
+        return response;
     }
 }

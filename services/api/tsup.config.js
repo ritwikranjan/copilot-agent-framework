@@ -1,0 +1,20 @@
+import { defineConfig } from 'tsup';
+
+export default defineConfig({
+    entry: ['src/index.ts'],
+    format: ['esm'],
+    target: 'node22',
+    outDir: 'dist',
+    clean: true,
+    sourcemap: true,
+    noExternal: ['@ritwikranjan/copilot-agent-framework'],
+    external: [
+        '@github/copilot-sdk',
+        '@azure/cosmos',
+        '@azure/identity',
+        '@azure/monitor-opentelemetry',
+        '@opentelemetry/api',
+        'express',
+        'debug',
+    ],
+});

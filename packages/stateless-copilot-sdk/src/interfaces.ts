@@ -6,7 +6,7 @@
  * - IAuditStore: audit data persistence (optional for audit logging)
  */
 
-import type { SessionInfo, Interaction, ToolExecution } from './models.js';
+import type { SessionInfo, Interaction, ToolExecution, SessionShare, ShareRole } from './models.js';
 
 /**
  * Interface for session persistence.
@@ -33,6 +33,26 @@ export interface ISessionStore {
 
     /** Get an active session by conversation ID for a user. */
     getSessionByConversationId(username: string, conversationId: string): Promise<SessionInfo | null>;
+
+    /** Get the most recent session by conversation ID (any status, for resume). */
+    getLastSessionByConversationId(username: string, conversationId: string): Promise<SessionInfo | null>;
+
+    // ============ Sharing Operations ============
+
+    /** Create a share record for a session. */
+    shareSession(share: SessionShare): Promise<SessionShare>;
+
+    /** Get all shares where the given user is the recipient. */
+    getSharedSessions(username: string): Promise<SessionShare[]>;
+
+    /** Look up a session by its short share_id link. */
+    getSessionByShareId(shareId: string): Promise<SessionInfo | null>;
+
+    /** Revoke (delete) a share by its share_id. Only the session owner should call this. */
+    revokeShare(shareId: string): Promise<boolean>;
+
+    /** Get all shares for a given session (used to check existing shares). */
+    getSharesForSession(sessionId: string): Promise<SessionShare[]>;
 }
 
 /**

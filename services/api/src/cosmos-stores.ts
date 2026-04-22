@@ -11,7 +11,7 @@
 
 import { CosmosClient, Database, Container, PartitionKeyDefinition } from '@azure/cosmos';
 import { ManagedIdentityCredential, DefaultAzureCredential } from '@azure/identity';
-import type { SessionInfo, Interaction, ToolExecution } from '@ritwikranjan/copilot-agent-framework';
+import type { SessionInfo, Interaction, ToolExecution, SessionShare } from '@ritwikranjan/copilot-agent-framework';
 import type { ISessionStore, IAuditStore } from '@ritwikranjan/copilot-agent-framework';
 
 // Cosmos DB Configuration (from the environment variables)
@@ -235,6 +235,52 @@ export class SessionCosmosStore extends CosmosClientBase implements ISessionStor
             .fetchAll();
 
         return resources.length > 0 ? resources[0] : null;
+    }
+
+    /**
+     * Get the most recent session for a conversation, regardless of status/expiry.
+     * Used by /resume to find the last expired session and carry over its copilot_session_id.
+     */
+    async getLastSessionByConversationId(username: string, conversationId: string): Promise<SessionInfo | null> {
+        const container = await this.ensureContainer(SESSIONS_CONTAINER, '/user_info/username');
+        const querySpec = {
+            query: `SELECT * FROM c WHERE c.conversation_id = @conversationId 
+                    ORDER BY c.start_time DESC
+                    OFFSET 0 LIMIT 1`,
+            parameters: [
+                { name: '@conversationId', value: conversationId }
+            ]
+        };
+
+        const { resources } = await container.items
+            .query<SessionInfo>(querySpec, { partitionKey: username })
+            .fetchAll();
+
+        return resources.length > 0 ? resources[0] : null;
+    }
+
+    // ============ Sharing Operations (Cosmos) ============
+    // TODO: These need a SessionShares container (partition key: /shared_with_username)
+    // For now, stub implementations that will be filled when Cosmos sharing container is created.
+
+    async shareSession(share: SessionShare): Promise<SessionShare> {
+        throw new Error('Cosmos shareSession not yet implemented — use InMemorySessionStore for development');
+    }
+
+    async getSharedSessions(_username: string): Promise<SessionShare[]> {
+        return [];
+    }
+
+    async getSessionByShareId(_shareId: string): Promise<SessionInfo | null> {
+        return null;
+    }
+
+    async revokeShare(_shareId: string): Promise<boolean> {
+        return false;
+    }
+
+    async getSharesForSession(_sessionId: string): Promise<SessionShare[]> {
+        return [];
     }
 }
 

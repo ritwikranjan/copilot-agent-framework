@@ -1,37 +1,28 @@
 # Teams Copilot Agent Dockerfile
-# Builds a unified service combining Teams Bot with direct Copilot SDK integration
+# Thin frontend that delegates to the internal API service.
 #
 # Supports agent profiles via AGENT_PROFILE build arg:
 #   docker build --build-arg AGENT_PROFILE=dnc-cosmos-expert ...
 #
-# When AGENT_PROFILE is set, system-prompt.md and tools-config.json are copied
-# from agents/<AGENT_PROFILE>/. Otherwise, falls back to the service defaults.
-#
 # Build context must be the repository root.
 
-# Build stage — uses npm workspaces to resolve the local stateless-copilot-sdk package
+# Build stage
 FROM node:24-alpine AS builder
 
 WORKDIR /app
 
-# Copy root workspace config
+# Copy workspace config (needed for npm workspace resolution)
 COPY package.json package-lock.json ./
 
-# Copy the library package
-COPY packages/stateless-copilot-sdk/package.json ./packages/stateless-copilot-sdk/
-COPY packages/stateless-copilot-sdk/tsconfig.json packages/stateless-copilot-sdk/tsup.config.js ./packages/stateless-copilot-sdk/
-COPY packages/stateless-copilot-sdk/src/ ./packages/stateless-copilot-sdk/src/
-
-# Copy the service package
+# Copy only the teams-copilot-agent service
 COPY services/teams-copilot-agent/package.json ./services/teams-copilot-agent/
 COPY services/teams-copilot-agent/tsconfig.json services/teams-copilot-agent/tsup.config.js ./services/teams-copilot-agent/
 
-# Install all dependencies via npm workspaces
-# Also install rollup's musl binary for Alpine Linux (works around npm optional dep bug)
-RUN npm ci && npm install @rollup/rollup-linux-x64-musl --save-optional 2>/dev/null || true
+# Install dependencies + rollup musl variant for Alpine
+RUN npm ci --workspace=services/teams-copilot-agent --include-workspace-root && \
+    npm install @rollup/rollup-linux-x64-musl --save-optional 2>/dev/null || true
 
-# Build the library first, then the service
-RUN npm run build --workspace=packages/stateless-copilot-sdk
+# Copy source and build
 COPY services/teams-copilot-agent/src/ ./services/teams-copilot-agent/src/
 RUN npm run build --workspace=services/teams-copilot-agent
 
@@ -72,18 +63,8 @@ WORKDIR /app
 
 # Copy service package.json, strip the workspace dep (already bundled by tsup)
 COPY services/teams-copilot-agent/package.json ./package.json
-RUN apk add --no-cache jq && \
-    jq 'del(.dependencies["@ritwikranjan/copilot-agent-framework"])' package.json > package.tmp.json && \
-    mv package.tmp.json package.json && \
-    apk del jq
-
-# Install production dependencies only (no workspace dep needed — tsup bundled it)
+# Install production dependencies only
 RUN npm install --omit=dev
-
-# Fix @github/copilot-sdk ESM import: session.js uses "vscode-jsonrpc/node"
-# without .js extension, which fails strict ESM resolution on Node 24+
-RUN find node_modules/@github/copilot-sdk -name '*.js' -exec \
-    sed -i 's|from "vscode-jsonrpc/node"|from "vscode-jsonrpc/node.js"|g' {} +
 
 # Copy built service from builder (tsup bundles the library into the service dist)
 COPY --from=builder /app/services/teams-copilot-agent/dist ./dist

@@ -1,22 +1,35 @@
-# Copilot Agents
+# Agent Profiles
 
-This directory contains example system prompts for customizing the Teams Copilot Agent. The unified architecture deploys a single Teams-integrated agent that you can customize via system prompts.
+This directory contains customizable agent profiles for the Copilot Agent Framework. Each profile defines a system prompt and optionally MCP tool configurations that shape the agent's behavior and capabilities.
 
 ## Architecture
 
-The new unified architecture deploys:
-    - **CLI Server**: Runs `copilot --server` internally
-    - **Teams Copilot Agent**: Connects to Teams via Bot Framework and uses the CLI server
+Agent profiles are injected at build time or runtime into the API service:
 
-```text
-Microsoft Teams
-      │
-      ▼
-Teams Copilot Agent ──▶ CLI Server ──▶ GitHub Copilot API
-      │
-      ▼
-  System Prompt
 ```
+agents/
+├── _default/              → Default generalist agent
+├── code-reviewer/         → Code review specialist
+├── writing-assistant/     → Writing editor
+├── dnc-cosmos-agent/      → Azure DNC + Cosmos DB analyst
+└── dnc-logs-agent/        → Log analysis detective
+
+                                API Service
+                                    ↓
+                           system-prompt.md + tools-config.json
+                                    ↓
+              CLI Server ◀── CopilotService (configured persona)
+```
+
+## Available Profiles
+
+| Profile | Description | MCP Tools |
+|---------|-------------|-----------|
+| `_default` | Versatile generalist — research, writing, analysis, code help | fetch server |
+| `code-reviewer` | Code review expert — security, performance, best practices | (default) |
+| `writing-assistant` | Document editor — grammar, clarity, tone, structure | (default) |
+| `dnc-cosmos-agent` | Azure DNC analyst — Cosmos DB table querying | Cosmos DB MCP |
+| `dnc-logs-agent` | Log detective ("Sherlog Holmes") — Azure Data Explorer/Kusto | ADX/Kusto MCP |
 
 ## Quick Start
 

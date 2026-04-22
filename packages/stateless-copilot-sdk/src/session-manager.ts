@@ -15,7 +15,10 @@ import {
     SessionStatus,
     SESSION_EXPIRATION_MS,
     UserInfo,
+    SessionShare,
+    ShareRole,
     createSessionInfo,
+    createSessionShare,
     getSessionPartitionKey
 } from './models.js';
 
@@ -382,6 +385,188 @@ export class SessionManager {
         }
 
         return this.endSession(username, session.id, status);
+    }
+
+    /**
+     * Reactivate the most recent session for a conversation.
+     * Finds the last session regardless of status, sets it back to active,
+     * and extends the expiry by the configured session duration.
+     *
+     * @returns The reactivated session, or null if no session found.
+     */
+    async reactivateSession(
+        username: string,
+        conversationId: string
+    ): Promise<SessionInfo | null> {
+        await this.initialize();
+
+        const lastSession = await this.db.getLastSessionByConversationId(username, conversationId);
+        if (!lastSession) {
+            this.log.warn('reactivateSession: no session found for conversation %s', conversationId);
+            return null;
+        }
+
+        // Reactivate: set status back to active, extend expiry
+        lastSession.status = SessionStatus.ACTIVE;
+        lastSession.end_time = undefined;
+        lastSession.expires_at = new Date(
+            Date.now() + this.sessionExpirationMs
+        ).toISOString();
+        lastSession.last_activity_at = new Date().toISOString();
+
+        const updated = await this.db.updateSession(
+            lastSession.id,
+            getSessionPartitionKey(lastSession),
+            lastSession
+        );
+
+        this.log.info(
+            'reactivateSession: reactivated session %s, new expiry=%s',
+            updated.id,
+            updated.expires_at
+        );
+        return updated;
+    }
+
+    // ============ Session Sharing ============
+
+    /**
+     * Share a session with another user.
+     *
+     * @param sessionId The session to share
+     * @param ownerUsername The session owner's username (must match)
+     * @param sharedWithUsername The recipient's username
+     * @param role The access role (viewer or collaborator)
+     * @returns The created SessionShare
+     * @throws SessionNotFoundError if session doesn't exist
+     * @throws Error if caller is not the session owner
+     */
+    async shareSession(
+        sessionId: string,
+        ownerUsername: string,
+        sharedWithUsername: string,
+        role: ShareRole = ShareRole.COLLABORATOR
+    ): Promise<SessionShare> {
+        await this.initialize();
+
+        const session = await this.db.getSession(sessionId, ownerUsername);
+        if (!session) {
+            throw new SessionNotFoundError(
+                `Session '${sessionId}' not found for user '${ownerUsername}'`
+            );
+        }
+
+        if (session.user_info.username !== ownerUsername) {
+            throw new Error(`User '${ownerUsername}' is not the owner of session '${sessionId}'`);
+        }
+
+        const share = createSessionShare(sessionId, ownerUsername, sharedWithUsername, role);
+        const created = await this.db.shareSession(share);
+
+        // Mark session as shared
+        if (!session.is_shared) {
+            session.is_shared = true;
+            session.share_id = share.share_id;
+            await this.db.updateSession(sessionId, getSessionPartitionKey(session), session);
+        }
+
+        this.log.info(
+            'shareSession: shared session %s with %s (role=%s, shareId=%s)',
+            sessionId, sharedWithUsername, role, share.share_id
+        );
+
+        return created;
+    }
+
+    /**
+     * Get all sessions accessible by a user (own + shared with them).
+     */
+    async getAccessibleSessions(username: string): Promise<{
+        own: SessionInfo[];
+        shared: Array<{ share: SessionShare; session: SessionInfo }>;
+    }> {
+        await this.initialize();
+
+        const own = await this.db.getSessionsByUser(username);
+        const shares = await this.db.getSharedSessions(username);
+
+        const shared: Array<{ share: SessionShare; session: SessionInfo }> = [];
+        for (const share of shares) {
+            const session = await this.db.getSession(share.session_id, share.session_owner);
+            if (session) {
+                shared.push({ share, session });
+            }
+        }
+
+        this.log.debug(
+            'getAccessibleSessions: found %d own + %d shared sessions for %s',
+            own.length, shared.length, username
+        );
+
+        return { own, shared };
+    }
+
+    /**
+     * Check if a user can access a session (as owner or via share).
+     *
+     * @returns The access role ('owner', the ShareRole, or null if no access)
+     */
+    async canAccessSession(
+        sessionId: string,
+        username: string
+    ): Promise<'owner' | ShareRole | null> {
+        await this.initialize();
+
+        // Check ownership first — try to find the session for this user
+        const ownSession = await this.db.getSession(sessionId, username);
+        if (ownSession) {
+            return 'owner';
+        }
+
+        // Check shares
+        const shares = await this.db.getSharesForSession(sessionId);
+        const userShare = shares.find(s => s.shared_with_username === username);
+        if (userShare) {
+            return userShare.role;
+        }
+
+        this.log.warn('canAccessSession: access denied for user %s on session %s', username, sessionId);
+        return null;
+    }
+
+    /**
+     * Revoke a session share.
+     *
+     * @param shareId The share_id to revoke
+     * @param ownerUsername The session owner's username (only owner can revoke)
+     * @returns true if revoked, false if not found
+     */
+    async revokeShare(shareId: string, ownerUsername: string): Promise<boolean> {
+        await this.initialize();
+
+        // Verify the share exists and belongs to this owner
+        const session = await this.db.getSessionByShareId(shareId);
+        if (!session) {
+            return false;
+        }
+
+        if (session.user_info.username !== ownerUsername) {
+            throw new Error(`User '${ownerUsername}' is not the owner of the shared session`);
+        }
+
+        const revoked = await this.db.revokeShare(shareId);
+        if (revoked) {
+            this.log.info('revokeShare: revoked share %s by owner %s', shareId, ownerUsername);
+        }
+        return revoked;
+    }
+
+    /**
+     * Get a session by its share link ID.
+     */
+    async getSessionByShareId(shareId: string): Promise<SessionInfo | null> {
+        await this.initialize();
+        return this.db.getSessionByShareId(shareId);
     }
 }
 

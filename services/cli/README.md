@@ -6,7 +6,7 @@ For high-level architecture and deployment instructions, see the [Project Root R
 
 ## Overview
 
-This container runs the Copilot CLI in server mode, accepting TCP connections from the Teams Copilot Agent. It includes Azure MCP for accessing Azure resources via managed identity.
+This container runs the Copilot CLI in server mode, accepting TCP connections from the [API Service](../api/README.md). It includes Azure MCP for accessing Azure resources via managed identity.
 
 ## Scalability & Persistence
 
